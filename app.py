@@ -13,13 +13,13 @@ st.set_page_config(
 )
 
 # ----------------------------------------------------------------------
-# 1. UI REAL ESTATE OPTIMIZATION (CLEAN HEADER & ULTRA-COMPACT CARDS)
+# 1. UI REAL ESTATE OPTIMIZATION (COMPACT CARDS & STYLING)
 # ----------------------------------------------------------------------
 st.markdown("""
 <style>
     /* Global Container Padding */
     .block-container {
-        padding-top: 2.8rem !important;
+        padding-top: 2.2rem !important;
         padding-bottom: 0.5rem !important;
         padding-left: 1.5rem !important;
         padding-right: 1.5rem !important;
@@ -86,15 +86,17 @@ st.markdown("""
         padding-bottom: 4px;
         margin-bottom: 5px;
     }
-    .card-symbol {
-        font-size: 0.96rem;
+    .card-symbol-link {
+        font-size: 0.95rem;
         font-weight: 700;
-        color: #0F172A;
-        text-decoration: none;
+        color: #1D4ED8 !important;
+        text-decoration: none !important;
+        cursor: pointer !important;
+        pointer-events: auto !important;
     }
-    .card-symbol:hover {
-        color: #2563EB;
-        text-decoration: underline;
+    .card-symbol-link:hover {
+        text-decoration: underline !important;
+        color: #1E40AF !important;
     }
     .badge-ready {
         background-color: #DCFCE7;
@@ -126,11 +128,22 @@ st.markdown("""
         font-weight: 600;
         color: #1E293B;
     }
+
+    /* Tighten button spacing on cards */
+    div[data-testid="stHorizontalBlock"] > div:has(button) {
+        margin-top: -6px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # ----------------------------------------------------------------------
-# 2. FORMATTING HELPERS (Indian Numbering, Date & Time Parsers)
+# 2. STATE INITIALIZATION (PERSISTENT WATCHLIST ACROSS SESSIONS)
+# ----------------------------------------------------------------------
+if "watchlist_symbols" not in st.session_state:
+    st.session_state.watchlist_symbols = set()
+
+# ----------------------------------------------------------------------
+# 3. FORMATTING HELPERS (Indian Numbering, Date, Time & TV URL)
 # ----------------------------------------------------------------------
 def format_indian_currency(val, decimals=2, prefix=""):
     """Formats numbers to Indian comma grouping (e.g. 12,087.00 or 1,075,937)."""
@@ -206,15 +219,20 @@ def format_last_seen_time(val):
 
     return val_str
 
-def extract_tv_url(formula_str):
-    """Extracts raw link from '=HYPERLINK("url", "text")' formula."""
-    if not isinstance(formula_str, str):
-        return ""
-    match = re.search(r'HYPERLINK\("([^"]+)"', formula_str, re.IGNORECASE)
-    return match.group(1) if match else (formula_str if formula_str.startswith("http") else "")
+def sanitize_tv_url(symbol, formula_str=""):
+    """Ensures a valid TradingView link is always returned even if formula reading fails."""
+    if isinstance(formula_str, str) and formula_str.strip():
+        match = re.search(r'HYPERLINK\("([^"]+)"', formula_str, re.IGNORECASE)
+        if match:
+            return match.group(1)
+        if formula_str.startswith("http"):
+            return formula_str
+
+    clean_sym = str(symbol).replace(".NS", "").replace("&", "_").replace("-", "_").strip().upper()
+    return f"https://www.tradingview.com/chart/qQrGXVOL/?symbol=NSE:{clean_sym}&interval=D"
 
 # ----------------------------------------------------------------------
-# 3. DATA INGESTION ENGINE
+# 4. DATA INGESTION ENGINE
 # ----------------------------------------------------------------------
 @st.cache_data(ttl=15)
 def load_sheet_data():
@@ -270,10 +288,9 @@ def load_sheet_data():
         else:
             df["High_52W_Date"] = df["High_52W_Date"].astype(str).replace("", "-")
 
-        if "TradingView_URL" in df.columns:
-            df["TradingView_URL"] = df["TradingView_URL"].apply(extract_tv_url)
-        else:
-            df["TradingView_URL"] = ""
+        # Guarantee valid TradingView link for every symbol
+        raw_urls = df["TradingView_URL"] if "TradingView_URL" in df.columns else [""] * len(df)
+        df["TradingView_URL"] = [sanitize_tv_url(s, u) for s, u in zip(df["Symbol"], raw_urls)]
 
         numeric_cols = [
             "LTP", "Stop_Loss", "Risk_Pct", "High_52W", "Dist_52WH", 
@@ -295,7 +312,7 @@ def load_sheet_data():
 df_raw = load_sheet_data()
 
 # ----------------------------------------------------------------------
-# 4. SIDEBAR: DATE, FLAT STRATEGY CHECKBOXES, RISK & DIST 52WH SLIDERS
+# 5. SIDEBAR: DATE, WATCHLIST FILTER, STRATEGIES, RISK & DIST SLIDERS
 # ----------------------------------------------------------------------
 st.sidebar.markdown("### 🔍 Signal Filters")
 
@@ -326,6 +343,16 @@ picked_date = st.sidebar.date_input(
 selected_date_str = picked_date.strftime("%Y-%m-%d")
 df_day = df_raw[df_raw["Date"] == selected_date_str].copy()
 
+# Watchlist Dedicated Filter Checkbox
+st.sidebar.markdown("---")
+only_watchlist = st.sidebar.checkbox(
+    f"⭐ Show Watchlist Only ({len(st.session_state.watchlist_symbols)})", 
+    value=False,
+    help="Filters all tabs down exclusively to candidates you have starred"
+)
+if only_watchlist:
+    df_day = df_day[df_day["Symbol"].isin(st.session_state.watchlist_symbols)]
+
 # Flat Strategy Checkbox Multi-Selection
 st.sidebar.markdown("**Strategy Selection**")
 all_strats = sorted([str(s) for s in df_raw["Strategy"].dropna().unique()])
@@ -355,7 +382,7 @@ min_dist_52wh = st.sidebar.slider(
 df_day = df_day[df_day["Dist_52WH"] >= min_dist_52wh]
 
 # ----------------------------------------------------------------------
-# 5. TOP HEADER & COMPACT METRICS BAR
+# 6. TOP HEADER & COMPACT METRICS BAR
 # ----------------------------------------------------------------------
 st.markdown("<div class=\"dashboard-title\">📊 Market Signals Hub</div>", unsafe_allow_html=True)
 
@@ -367,43 +394,51 @@ kpi3.metric("AVWAP Bounces", len(df_day[df_day["Strategy"] == "AVWAP Bounce"]))
 kpi4.metric("Liquidity Sweeps", len(df_day[df_day["Strategy"] == "Liquidity Sweep"]))
 
 # ----------------------------------------------------------------------
-# 6. TABS (Signals Table, Overview Cards, Watchlist)
+# 7. TABS (Signals Table, Overview Cards, Watchlist)
 # ----------------------------------------------------------------------
-tab_signals, tab_overview, tab_watchlist = st.tabs(["📋 Signals Table", "📌 Overview Cards", "⭐ Watchlist"])
+tab_signals, tab_overview, tab_watchlist = st.tabs([
+    f"📋 Signals Table ({len(df_day)})", 
+    f"📌 Overview Cards ({len(active_setups)})", 
+    f"⭐ Watchlist ({len(st.session_state.watchlist_symbols)})"
+])
 
-# --- TAB 1: SIGNALS TABLE ---
+# --- TAB 1: SIGNALS TABLE WITH INTERACTIVE STAR SHORTLISTING ---
 with tab_signals:
-    st.markdown(f"**All Signals ({len(df_day)})**")
-
     if df_day.empty:
         st.info(f"No signals match the filters for {selected_date_str}.")
     else:
-        display_df = pd.DataFrame()
-        display_df["Date"] = df_day["Date"].astype(str)
-        display_df["Symbol"] = df_day["Symbol"].astype(str)
-        display_df["Strategy"] = df_day["Strategy"].astype(str)
-        display_df["Action"] = df_day["Action"].astype(str)
-        display_df["Alert_Count"] = df_day["Alert_Count"].astype(int)
-        display_df["Last_Seen"] = df_day["Last_Seen"].astype(str)
+        st.caption("💡 *Check the ⭐ Watch box to shortlist any stock into your Watchlist.*")
+        
+        # Build display table with interactive Watch column
+        table_df = pd.DataFrame()
+        table_df["⭐ Watch"] = df_day["Symbol"].apply(lambda s: s in st.session_state.watchlist_symbols)
+        table_df["Date"] = df_day["Date"].astype(str)
+        table_df["Symbol"] = df_day["Symbol"].astype(str)
+        table_df["Strategy"] = df_day["Strategy"].astype(str)
+        table_df["Action"] = df_day["Action"].astype(str)
+        table_df["Alert_Count"] = df_day["Alert_Count"].astype(int)
+        table_df["Last_Seen"] = df_day["Last_Seen"].astype(str)
 
         # Formatted Indian numbers (xx,xx,xxx)
-        display_df["LTP"] = df_day["LTP"].apply(lambda v: format_indian_currency(v, 2, "₹"))
-        display_df["Stop_Loss"] = df_day["Stop_Loss"].apply(lambda v: format_indian_currency(v, 2, "₹"))
-        display_df["Risk_Pct"] = df_day["Risk_Pct"].apply(lambda v: f"{v:.2f}%")
-        display_df["High_52W"] = df_day["High_52W"].apply(lambda v: format_indian_currency(v, 2, "₹"))
-        display_df["High_52W_Date"] = df_day["High_52W_Date"].astype(str)
-        display_df["Dist_52WH"] = df_day["Dist_52WH"].apply(lambda v: f"{v:.2f}%")
-        display_df["R2"] = df_day["R2"].apply(lambda v: f"{v:.2f}")
-        display_df["RSI"] = df_day["RSI"].apply(lambda v: f"{v:.1f}")
-        display_df["Turnover_Cr"] = df_day["Turnover_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 1)} Cr")
-        display_df["Market_Cap_Cr"] = df_day["Market_Cap_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 0)} Cr")
-        display_df["Today_Volume"] = df_day["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
-        display_df["Avg_1W_Volume"] = df_day["Avg_1W_Volume"].apply(lambda v: format_indian_currency(v, 0))
-        display_df["TradingView_URL"] = df_day["TradingView_URL"]
+        table_df["LTP"] = df_day["LTP"].apply(lambda v: format_indian_currency(v, 2, "₹"))
+        table_df["Stop_Loss"] = df_day["Stop_Loss"].apply(lambda v: format_indian_currency(v, 2, "₹"))
+        table_df["Risk_Pct"] = df_day["Risk_Pct"].apply(lambda v: f"{v:.2f}%")
+        table_df["High_52W"] = df_day["High_52W"].apply(lambda v: format_indian_currency(v, 2, "₹"))
+        table_df["High_52W_Date"] = df_day["High_52W_Date"].astype(str)
+        table_df["Dist_52WH"] = df_day["Dist_52WH"].apply(lambda v: f"{v:.2f}%")
+        table_df["R2"] = df_day["R2"].apply(lambda v: f"{v:.2f}")
+        table_df["RSI"] = df_day["RSI"].apply(lambda v: f"{v:.1f}")
+        table_df["Turnover_Cr"] = df_day["Turnover_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 1)} Cr")
+        table_df["Market_Cap_Cr"] = df_day["Market_Cap_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 0)} Cr")
+        table_df["Today_Volume"] = df_day["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
+        table_df["Avg_1W_Volume"] = df_day["Avg_1W_Volume"].apply(lambda v: format_indian_currency(v, 0))
+        table_df["TradingView_URL"] = df_day["TradingView_URL"]
 
-        st.dataframe(
-            display_df,
+        # Editable data table for instant star toggle
+        edited_table = st.data_editor(
+            table_df,
             column_config={
+                "⭐ Watch": st.column_config.CheckboxColumn("⭐ Watch", default=False),
                 "Date": st.column_config.TextColumn("Date", alignment="center"),
                 "Symbol": st.column_config.TextColumn("Symbol", alignment="center"),
                 "Strategy": st.column_config.TextColumn("Strategy", alignment="center"),
@@ -424,36 +459,49 @@ with tab_signals:
                 "Avg_1W_Volume": st.column_config.TextColumn("1W Avg Vol", alignment="center"),
                 "TradingView_URL": st.column_config.LinkColumn("Chart", display_text="Open ↗", alignment="center")
             },
+            disabled=[c for c in table_df.columns if c != "⭐ Watch"],
             hide_index=True,
             use_container_width=True,
-            height=700
+            height=680,
+            key="signals_data_editor"
         )
 
-# --- TAB 2: OVERVIEW (COMPACT 4-COLUMN CARDS WITH HYPERLINKED SYMBOLS) ---
+        # Sync state if user toggles checkbox in the table
+        updated_stars = set(edited_table[edited_table["⭐ Watch"] == True]["Symbol"])
+        unstarred_in_current_view = set(edited_table[edited_table["⭐ Watch"] == False]["Symbol"])
+        
+        # Add newly checked
+        st.session_state.watchlist_symbols.update(updated_stars)
+        # Remove unchecked
+        st.session_state.watchlist_symbols.difference_update(unstarred_in_current_view)
+
+# --- TAB 2: OVERVIEW CARDS (WITH WORKING TV LINKS & COMPACT STARS) ---
 with tab_overview:
-    st.markdown(f"**Active Ready Setups ({len(active_setups)})**")
     if active_setups.empty:
         st.info(f"No active setups found matching filters for {selected_date_str}.")
     else:
-        # 4-column compact grid fits more cards per screen
         cols_per_row = 4
         chunks = [active_setups.iloc[i:i + cols_per_row] for i in range(0, len(active_setups), cols_per_row)]
+        
         for chunk in chunks:
             grid = st.columns(cols_per_row)
             for idx, (_, row) in enumerate(chunk.iterrows()):
+                sym = row['Symbol']
+                is_starred = sym in st.session_state.watchlist_symbols
+                star_icon = "⭐" if is_starred else "☆"
+
                 with grid[idx]:
                     badge_class = "badge-ready" if "Ready" in str(row['Action']) else "badge-wait"
-                    
-                    # Direct TradingView Hyperlink on the stock symbol
-                    if row["TradingView_URL"]:
-                        symbol_link = f"<a href=\"{row['TradingView_URL']}\" target=\"_blank\" class=\"card-symbol\">{row['Symbol']} ↗</a>"
-                    else:
-                        symbol_link = f"<span class=\"card-symbol\">{row['Symbol']}</span>"
+                    tv_url = row["TradingView_URL"]
 
+                    # Ultra-compact Card HTML with working Clickable Anchor
                     card_html = f"""
                     <div class="signal-card">
                         <div class="card-header">
-                            <div>{symbol_link} <span style="font-size:0.75rem; color:#64748B;">({row['Strategy']})</span></div>
+                            <div>
+                                <a href="{tv_url}" target="_blank" class="card-symbol-link">{sym} ↗</a>
+                                <span style="font-size:0.75rem; color:#64748B;">({row['Strategy']})</span>
+                            </div>
                             <span class="{badge_class}">{row['Action']}</span>
                         </div>
                         <div class="card-grid">
@@ -469,28 +517,64 @@ with tab_overview:
                     </div>
                     """
                     st.markdown(card_html, unsafe_allow_html=True)
+                    
+                    # Bookmark Star Toggle right below card header
+                    if st.button(f"{star_icon} Shortlist {sym}", key=f"btn_star_{sym}", use_container_width=True):
+                        if is_starred:
+                            st.session_state.watchlist_symbols.discard(sym)
+                        else:
+                            st.session_state.watchlist_symbols.add(sym)
+                        st.rerun()
 
-# --- TAB 3: WATCHLIST ---
+# --- TAB 3: WATCHLIST (BOOKMARKED & SHORTLISTED CANDIDATES) ---
 with tab_watchlist:
-    st.markdown("**Priority Trigger Watchlist**")
-    watchlist_df = df_day[df_day["Action"].isin(["Retested & Ready", "Ready (ORB)", "Confirm Reclaim"])]
-    if watchlist_df.empty:
-        st.info(f"Watchlist is clear for {selected_date_str}.")
-    else:
-        for _, row in watchlist_df.iterrows():
-            badge_class = "badge-ready" if "Ready" in str(row['Action']) else "badge-wait"
-            symbol_link = f"<a href=\"{row['TradingView_URL']}\" target=\"_blank\" class=\"card-symbol\">{row['Symbol']} ↗</a>" if row["TradingView_URL"] else f"<span class=\"card-symbol\">{row['Symbol']}</span>"
+    st.markdown(f"### ⭐ Shortlisted Watchlist ({len(st.session_state.watchlist_symbols)})")
+    
+    # Filter dataset for bookmarked symbols across the active date
+    bookmarked_df = df_day[df_day["Symbol"].isin(st.session_state.watchlist_symbols)].copy()
 
-            card_html = f"""
-            <div class="signal-card" style="margin-bottom: 6px;">
-                <div class="card-header">
-                    <div>{symbol_link} <span style="color:#64748B;">({row['Strategy']})</span></div>
-                    <span class="{badge_class}">{row['Action']}</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; font-size:0.80rem;">
-                    <span><b>LTP:</b> {format_indian_currency(row['LTP'], 2, '₹')} | <b>SL:</b> {format_indian_currency(row['Stop_Loss'], 2, '₹')} (<b>Risk:</b> {row['Risk_Pct']:.2f}%)</span>
-                    <span><b>52WH:</b> {format_indian_currency(row['High_52W'], 1, '₹')} ({row['High_52W_Date']}) [<b>{row['Dist_52WH']:.1f}%</b>] | <b>MCap:</b> {format_indian_currency(row['Market_Cap_Cr'], 0, '₹')} Cr</span>
-                </div>
-            </div>
-            """
-            st.markdown(card_html, unsafe_allow_html=True)
+    if not st.session_state.watchlist_symbols:
+        st.info("Your watchlist is currently empty. Star candidates from the **Signals Table** or **Overview Cards** to populate this list.")
+    elif bookmarked_df.empty:
+        st.warning(f"None of your {len(st.session_state.watchlist_symbols)} starred stocks have signals recorded for {selected_date_str}.")
+        st.caption(f"Starred symbols: {', '.join(sorted(st.session_state.watchlist_symbols))}")
+    else:
+        # Clear Watchlist button
+        if st.button("🗑️ Clear All Starred", key="btn_clear_wl"):
+            st.session_state.watchlist_symbols.clear()
+            st.rerun()
+
+        watch_display = pd.DataFrame()
+        watch_display["Symbol"] = bookmarked_df["Symbol"].astype(str)
+        watch_display["Strategy"] = bookmarked_df["Strategy"].astype(str)
+        watch_display["Action"] = bookmarked_df["Action"].astype(str)
+        watch_display["LTP"] = bookmarked_df["LTP"].apply(lambda v: format_indian_currency(v, 2, "₹"))
+        watch_display["Stop_Loss"] = bookmarked_df["Stop_Loss"].apply(lambda v: format_indian_currency(v, 2, "₹"))
+        watch_display["Risk_Pct"] = bookmarked_df["Risk_Pct"].apply(lambda v: f"{v:.2f}%")
+        watch_display["52W High"] = bookmarked_df["High_52W"].apply(lambda v: format_indian_currency(v, 2, "₹"))
+        watch_display["52W High Date"] = bookmarked_df["High_52W_Date"].astype(str)
+        watch_display["Dist 52WH"] = bookmarked_df["Dist_52WH"].apply(lambda v: f"{v:.2f}%")
+        watch_display["Today Vol"] = bookmarked_df["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
+        watch_display["Market Cap"] = bookmarked_df["Market_Cap_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 0)} Cr")
+        watch_display["Chart"] = bookmarked_df["TradingView_URL"]
+
+        st.dataframe(
+            watch_display,
+            column_config={
+                "Symbol": st.column_config.TextColumn("Symbol", alignment="center"),
+                "Strategy": st.column_config.TextColumn("Strategy", alignment="center"),
+                "Action": st.column_config.TextColumn("Action", alignment="center"),
+                "LTP": st.column_config.TextColumn("LTP", alignment="center"),
+                "Stop_Loss": st.column_config.TextColumn("Stop Loss", alignment="center"),
+                "Risk_Pct": st.column_config.TextColumn("Risk", alignment="center"),
+                "52W High": st.column_config.TextColumn("52W High", alignment="center"),
+                "52W High Date": st.column_config.TextColumn("52WH Date", alignment="center"),
+                "Dist 52WH": st.column_config.TextColumn("Dist 52WH", alignment="center"),
+                "Today Vol": st.column_config.TextColumn("Today Vol", alignment="center"),
+                "Market Cap": st.column_config.TextColumn("Market Cap", alignment="center"),
+                "Chart": st.column_config.LinkColumn("TradingView Chart", display_text="Open ↗", alignment="center")
+            },
+            hide_index=True,
+            use_container_width=True,
+            height=450
+        )
