@@ -13,7 +13,7 @@ st.set_page_config(
 )
 
 # ----------------------------------------------------------------------
-# 1. UI REAL ESTATE OPTIMIZATION (COMPACT CARDS & STYLING)
+# 1. UI REAL ESTATE OPTIMIZATION (COMPACT CARDS, DIALOG & CSS)
 # ----------------------------------------------------------------------
 st.markdown("""
 <style>
@@ -129,24 +129,38 @@ st.markdown("""
         color: #1E293B;
     }
 
-    /* Tighten button spacing on cards */
-    div[data-testid="stHorizontalBlock"] > div:has(button) {
-        margin-top: -6px;
+    /* Integrated Inline Star Button within card */
+    .card-star-btn div[data-testid="stButton"] > button {
+        padding: 0px 4px !important;
+        height: 24px !important;
+        min-height: 24px !important;
+        font-size: 0.95rem !important;
+        line-height: 1 !important;
+        background: transparent !important;
+        border: none !important;
+        color: #F59E0B !important;
+        box-shadow: none !important;
+    }
+    .card-star-btn div[data-testid="stButton"] > button:hover {
+        background-color: #FEF3C7 !important;
+        border-radius: 4px !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # ----------------------------------------------------------------------
-# 2. STATE INITIALIZATION (PERSISTENT WATCHLIST ACROSS SESSIONS)
+# 2. STATE INITIALIZATION (WATCHLIST & PERSISTENT NOTES)
 # ----------------------------------------------------------------------
 if "watchlist_symbols" not in st.session_state:
     st.session_state.watchlist_symbols = set()
+
+if "signal_notes" not in st.session_state:
+    st.session_state.signal_notes = {}
 
 # ----------------------------------------------------------------------
 # 3. FORMATTING HELPERS (Indian Numbering, Date, Time & TV URL)
 # ----------------------------------------------------------------------
 def format_indian_currency(val, decimals=2, prefix=""):
-    """Formats numbers to Indian comma grouping (e.g. 12,087.00 or 1,075,937)."""
     if pd.isna(val) or val == "" or val is None:
         return "-"
     try:
@@ -183,7 +197,6 @@ def format_indian_currency(val, decimals=2, prefix=""):
     return f"{sign}{prefix}{res}{dec_part}"
 
 def clean_date_str(val):
-    """Parses Google Sheets serial day counts or date strings into clean YYYY-MM-DD."""
     if pd.isna(val) or str(val).strip() == "":
         return datetime.now().strftime("%Y-%m-%d")
     val_str = str(val).strip()
@@ -196,7 +209,6 @@ def clean_date_str(val):
     return val_str
 
 def format_last_seen_time(val):
-    """Converts Sheets day fractions (0.57407...) or raw strings to HH:MM format."""
     if pd.isna(val) or val == "" or val is None:
         return "-"
     val_str = str(val).strip()
@@ -220,7 +232,6 @@ def format_last_seen_time(val):
     return val_str
 
 def sanitize_tv_url(symbol, formula_str=""):
-    """Ensures a valid TradingView link is always returned even if formula reading fails."""
     if isinstance(formula_str, str) and formula_str.strip():
         match = re.search(r'HYPERLINK\("([^"]+)"', formula_str, re.IGNORECASE)
         if match:
@@ -232,7 +243,36 @@ def sanitize_tv_url(symbol, formula_str=""):
     return f"https://www.tradingview.com/chart/qQrGXVOL/?symbol=NSE:{clean_sym}&interval=D"
 
 # ----------------------------------------------------------------------
-# 4. DATA INGESTION ENGINE
+# 4. NOTE DIALOG POPUP
+# ----------------------------------------------------------------------
+@st.dialog("📝 Signal Trade Note")
+def open_note_modal(symbol, strategy, ltp):
+    current_entry = st.session_state.signal_notes.get(symbol, {})
+    current_note = current_entry.get("note", "")
+
+    st.markdown(f"**Stock:** `{symbol}` | **Strategy:** `{strategy}` | **LTP:** `₹{ltp}`")
+    new_note = st.text_area("Observations / Levels / Trade Plan:", value=current_note, height=140, placeholder="e.g. Volume dry-up noticed, enter if 15m candle closes above trigger level...")
+
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        if st.button("💾 Save Note", use_container_width=True, type="primary"):
+            if new_note.strip():
+                st.session_state.signal_notes[symbol] = {
+                    "note": new_note.strip(),
+                    "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "strategy": strategy,
+                    "ltp": ltp
+                }
+            else:
+                st.session_state.signal_notes.pop(symbol, None)
+            st.rerun()
+    with c2:
+        if current_note and st.button("🗑️ Delete", use_container_width=True):
+            st.session_state.signal_notes.pop(symbol, None)
+            st.rerun()
+
+# ----------------------------------------------------------------------
+# 5. DATA INGESTION ENGINE
 # ----------------------------------------------------------------------
 @st.cache_data(ttl=15)
 def load_sheet_data():
@@ -288,7 +328,6 @@ def load_sheet_data():
         else:
             df["High_52W_Date"] = df["High_52W_Date"].astype(str).replace("", "-")
 
-        # Guarantee valid TradingView link for every symbol
         raw_urls = df["TradingView_URL"] if "TradingView_URL" in df.columns else [""] * len(df)
         df["TradingView_URL"] = [sanitize_tv_url(s, u) for s, u in zip(df["Symbol"], raw_urls)]
 
@@ -312,7 +351,7 @@ def load_sheet_data():
 df_raw = load_sheet_data()
 
 # ----------------------------------------------------------------------
-# 5. SIDEBAR: DATE, WATCHLIST FILTER, STRATEGIES, RISK & DIST SLIDERS
+# 6. SIDEBAR: DATE, WATCHLIST FILTER, STRATEGIES, RISK & DIST SLIDERS
 # ----------------------------------------------------------------------
 st.sidebar.markdown("### 🔍 Signal Filters")
 
@@ -320,7 +359,6 @@ if df_raw.empty:
     st.warning("No data found in Google Sheet. Run your scan script first.")
     st.stop()
 
-# Date selector
 available_dates = []
 for d_str in df_raw["Date"].dropna().unique():
     try:
@@ -348,7 +386,7 @@ st.sidebar.markdown("---")
 only_watchlist = st.sidebar.checkbox(
     f"⭐ Show Watchlist Only ({len(st.session_state.watchlist_symbols)})", 
     value=False,
-    help="Filters all tabs down exclusively to candidates you have starred"
+    help="Filters all views exclusively to stocks currently bookmarked"
 )
 if only_watchlist:
     df_day = df_day[df_day["Symbol"].isin(st.session_state.watchlist_symbols)]
@@ -382,7 +420,7 @@ min_dist_52wh = st.sidebar.slider(
 df_day = df_day[df_day["Dist_52WH"] >= min_dist_52wh]
 
 # ----------------------------------------------------------------------
-# 6. TOP HEADER & COMPACT METRICS BAR
+# 7. TOP HEADER & COMPACT METRICS BAR
 # ----------------------------------------------------------------------
 st.markdown("<div class=\"dashboard-title\">📊 Market Signals Hub</div>", unsafe_allow_html=True)
 
@@ -394,24 +432,23 @@ kpi3.metric("AVWAP Bounces", len(df_day[df_day["Strategy"] == "AVWAP Bounce"]))
 kpi4.metric("Liquidity Sweeps", len(df_day[df_day["Strategy"] == "Liquidity Sweep"]))
 
 # ----------------------------------------------------------------------
-# 7. TABS (Signals Table, Overview Cards, Watchlist)
+# 8. 4-TAB WORKSPACE (Signals Table, Overview Cards, Watchlist, Notes)
 # ----------------------------------------------------------------------
-tab_signals, tab_overview, tab_watchlist = st.tabs([
+tab_signals, tab_overview, tab_watchlist, tab_notes = st.tabs([
     f"📋 Signals Table ({len(df_day)})", 
     f"📌 Overview Cards ({len(active_setups)})", 
-    f"⭐ Watchlist ({len(st.session_state.watchlist_symbols)})"
+    f"⭐ Watchlist ({len(st.session_state.watchlist_symbols)})",
+    f"📝 Notes ({len(st.session_state.signal_notes)})"
 ])
 
-# --- TAB 1: SIGNALS TABLE WITH INTERACTIVE STAR SHORTLISTING ---
+# --- TAB 1: SIGNALS TABLE (WATCHLIST STAR AS LAST COLUMN) ---
 with tab_signals:
     if df_day.empty:
         st.info(f"No signals match the filters for {selected_date_str}.")
     else:
-        st.caption("💡 *Check the ⭐ Watch box to shortlist any stock into your Watchlist.*")
-        
-        # Build display table with interactive Watch column
+        st.caption("💡 *Select '⭐ Watch' in the last column to bookmark a stock | Use the Note launcher below for trade plans.*")
+
         table_df = pd.DataFrame()
-        table_df["⭐ Watch"] = df_day["Symbol"].apply(lambda s: s in st.session_state.watchlist_symbols)
         table_df["Date"] = df_day["Date"].astype(str)
         table_df["Symbol"] = df_day["Symbol"].astype(str)
         table_df["Strategy"] = df_day["Strategy"].astype(str)
@@ -419,7 +456,7 @@ with tab_signals:
         table_df["Alert_Count"] = df_day["Alert_Count"].astype(int)
         table_df["Last_Seen"] = df_day["Last_Seen"].astype(str)
 
-        # Formatted Indian numbers (xx,xx,xxx)
+        # Formatted Indian numbers
         table_df["LTP"] = df_day["LTP"].apply(lambda v: format_indian_currency(v, 2, "₹"))
         table_df["Stop_Loss"] = df_day["Stop_Loss"].apply(lambda v: format_indian_currency(v, 2, "₹"))
         table_df["Risk_Pct"] = df_day["Risk_Pct"].apply(lambda v: f"{v:.2f}%")
@@ -433,12 +470,14 @@ with tab_signals:
         table_df["Today_Volume"] = df_day["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
         table_df["Avg_1W_Volume"] = df_day["Avg_1W_Volume"].apply(lambda v: format_indian_currency(v, 0))
         table_df["TradingView_URL"] = df_day["TradingView_URL"]
+        table_df["Has_Note"] = df_day["Symbol"].apply(lambda s: "📝 Yes" if s in st.session_state.signal_notes else "-")
+        
+        # Star selector positioned as the very last column
+        table_df["Watchlist"] = df_day["Symbol"].apply(lambda s: "⭐ Watch" if s in st.session_state.watchlist_symbols else "☆ Unwatched")
 
-        # Editable data table for instant star toggle
         edited_table = st.data_editor(
             table_df,
             column_config={
-                "⭐ Watch": st.column_config.CheckboxColumn("⭐ Watch", default=False),
                 "Date": st.column_config.TextColumn("Date", alignment="center"),
                 "Symbol": st.column_config.TextColumn("Symbol", alignment="center"),
                 "Strategy": st.column_config.TextColumn("Strategy", alignment="center"),
@@ -457,25 +496,43 @@ with tab_signals:
                 "Market_Cap_Cr": st.column_config.TextColumn("MCap (₹Cr)", alignment="center"),
                 "Today_Volume": st.column_config.TextColumn("Today Vol", alignment="center"),
                 "Avg_1W_Volume": st.column_config.TextColumn("1W Avg Vol", alignment="center"),
-                "TradingView_URL": st.column_config.LinkColumn("Chart", display_text="Open ↗", alignment="center")
+                "TradingView_URL": st.column_config.LinkColumn("Chart", display_text="Open ↗", alignment="center"),
+                "Has_Note": st.column_config.TextColumn("Note", alignment="center"),
+                "Watchlist": st.column_config.SelectboxColumn(
+                    "Watchlist",
+                    options=["☆ Unwatched", "⭐ Watch"],
+                    default="☆ Unwatched",
+                    required=True,
+                    alignment="center"
+                )
             },
-            disabled=[c for c in table_df.columns if c != "⭐ Watch"],
+            disabled=[c for c in table_df.columns if c != "Watchlist"],
             hide_index=True,
             use_container_width=True,
-            height=680,
+            height=600,
             key="signals_data_editor"
         )
 
-        # Sync state if user toggles checkbox in the table
-        updated_stars = set(edited_table[edited_table["⭐ Watch"] == True]["Symbol"])
-        unstarred_in_current_view = set(edited_table[edited_table["⭐ Watch"] == False]["Symbol"])
-        
-        # Add newly checked
+        # Synchronize Star toggles from the selectbox column
+        updated_stars = set(edited_table[edited_table["Watchlist"] == "⭐ Watch"]["Symbol"])
+        unstarred_in_current_view = set(edited_table[edited_table["Watchlist"] == "☆ Unwatched"]["Symbol"])
         st.session_state.watchlist_symbols.update(updated_stars)
-        # Remove unchecked
         st.session_state.watchlist_symbols.difference_update(unstarred_in_current_view)
 
-# --- TAB 2: OVERVIEW CARDS (WITH WORKING TV LINKS & COMPACT STARS) ---
+        # Quick Note Launcher
+        st.markdown("---")
+        n_col1, n_col2 = st.columns([3, 1])
+        with n_col1:
+            sym_list = sorted(list(df_day["Symbol"].unique()))
+            chosen_sym = st.selectbox("Select Symbol to Add / Edit Note:", options=sym_list, key="table_note_picker")
+        with n_col2:
+            st.write("")
+            st.write("")
+            if st.button("📝 Open Note Modal", use_container_width=True):
+                row_match = df_day[df_day["Symbol"] == chosen_sym].iloc[0]
+                open_note_modal(chosen_sym, row_match["Strategy"], format_indian_currency(row_match["LTP"], 2))
+
+# --- TAB 2: OVERVIEW CARDS ---
 with tab_overview:
     if active_setups.empty:
         st.info(f"No active setups found matching filters for {selected_date_str}.")
@@ -489,21 +546,33 @@ with tab_overview:
                 sym = row['Symbol']
                 is_starred = sym in st.session_state.watchlist_symbols
                 star_icon = "⭐" if is_starred else "☆"
+                has_note_tag = " 📝" if sym in st.session_state.signal_notes else ""
 
                 with grid[idx]:
                     badge_class = "badge-ready" if "Ready" in str(row['Action']) else "badge-wait"
                     tv_url = row["TradingView_URL"]
 
-                    # Ultra-compact Card HTML with working Clickable Anchor
+                    h_c1, h_c2, h_c3 = st.columns([6, 3, 2])
+                    with h_c1:
+                        st.markdown(
+                            f"<a href=\"{tv_url}\" target=\"_blank\" class=\"card-symbol-link\">{sym} ↗</a> "
+                            f"<span style=\"font-size:0.75rem; color:#64748B;\">({row['Strategy']}){has_note_tag}</span>",
+                            unsafe_allow_html=True
+                        )
+                    with h_c2:
+                        st.markdown(f"<span class=\"{badge_class}\">{row['Action']}</span>", unsafe_allow_html=True)
+                    with h_c3:
+                        st.markdown("<div class=\"card-star-btn\">", unsafe_allow_html=True)
+                        if st.button(star_icon, key=f"star_inline_{sym}", help="Toggle Watchlist Bookmark"):
+                            if is_starred:
+                                st.session_state.watchlist_symbols.discard(sym)
+                            else:
+                                st.session_state.watchlist_symbols.add(sym)
+                            st.rerun()
+                        st.markdown("</div>", unsafe_allow_html=True)
+
                     card_html = f"""
-                    <div class="signal-card">
-                        <div class="card-header">
-                            <div>
-                                <a href="{tv_url}" target="_blank" class="card-symbol-link">{sym} ↗</a>
-                                <span style="font-size:0.75rem; color:#64748B;">({row['Strategy']})</span>
-                            </div>
-                            <span class="{badge_class}">{row['Action']}</span>
-                        </div>
+                    <div class="signal-card" style="margin-top:-6px;">
                         <div class="card-grid">
                             <div><span class="card-label">LTP:</span> <span class="card-val">{format_indian_currency(row['LTP'], 2, '₹')}</span></div>
                             <div><span class="card-label">Risk:</span> <span class="card-val">{row['Risk_Pct']:.2f}%</span></div>
@@ -517,20 +586,11 @@ with tab_overview:
                     </div>
                     """
                     st.markdown(card_html, unsafe_allow_html=True)
-                    
-                    # Bookmark Star Toggle right below card header
-                    if st.button(f"{star_icon} Shortlist {sym}", key=f"btn_star_{sym}", use_container_width=True):
-                        if is_starred:
-                            st.session_state.watchlist_symbols.discard(sym)
-                        else:
-                            st.session_state.watchlist_symbols.add(sym)
-                        st.rerun()
 
-# --- TAB 3: WATCHLIST (BOOKMARKED & SHORTLISTED CANDIDATES) ---
+# --- TAB 3: WATCHLIST ---
 with tab_watchlist:
     st.markdown(f"### ⭐ Shortlisted Watchlist ({len(st.session_state.watchlist_symbols)})")
     
-    # Filter dataset for bookmarked symbols across the active date
     bookmarked_df = df_day[df_day["Symbol"].isin(st.session_state.watchlist_symbols)].copy()
 
     if not st.session_state.watchlist_symbols:
@@ -539,7 +599,6 @@ with tab_watchlist:
         st.warning(f"None of your {len(st.session_state.watchlist_symbols)} starred stocks have signals recorded for {selected_date_str}.")
         st.caption(f"Starred symbols: {', '.join(sorted(st.session_state.watchlist_symbols))}")
     else:
-        # Clear Watchlist button
         if st.button("🗑️ Clear All Starred", key="btn_clear_wl"):
             st.session_state.watchlist_symbols.clear()
             st.rerun()
@@ -578,3 +637,43 @@ with tab_watchlist:
             use_container_width=True,
             height=450
         )
+
+# --- TAB 4: SIGNAL NOTES DIRECTORY ---
+with tab_notes:
+    st.markdown(f"### 📝 Saved Trade Notes ({len(st.session_state.signal_notes)})")
+
+    if not st.session_state.signal_notes:
+        st.info("No trade notes saved yet. Use the note launcher on the Signals Table to attach notes to setups.")
+    else:
+        note_rows = []
+        for sym, data in st.session_state.signal_notes.items():
+            tv_link = sanitize_tv_url(sym)
+            note_rows.append({
+                "Symbol": sym,
+                "Strategy": data.get("strategy", "-"),
+                "LTP (₹)": data.get("ltp", "-"),
+                "Note": data.get("note", ""),
+                "Last Updated": data.get("updated_at", "-"),
+                "Chart": tv_link
+            })
+
+        notes_df = pd.DataFrame(note_rows)
+
+        st.dataframe(
+            notes_df,
+            column_config={
+                "Symbol": st.column_config.TextColumn("Symbol", alignment="center"),
+                "Strategy": st.column_config.TextColumn("Strategy", alignment="center"),
+                "LTP (₹)": st.column_config.TextColumn("LTP", alignment="center"),
+                "Note": st.column_config.TextColumn("Observation / Trade Plan", width="large"),
+                "Last Updated": st.column_config.TextColumn("Updated At", alignment="center"),
+                "Chart": st.column_config.LinkColumn("TradingView", display_text="Open ↗", alignment="center")
+            },
+            hide_index=True,
+            use_container_width=True,
+            height=450
+        )
+
+        if st.button("🗑️ Clear All Notes", key="btn_clear_all_notes"):
+            st.session_state.signal_notes.clear()
+            st.rerun()
