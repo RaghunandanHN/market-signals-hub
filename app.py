@@ -1,6 +1,6 @@
 import os
 import re
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import gspread
 import pandas as pd
 import streamlit as st
@@ -127,8 +127,12 @@ if "signal_notes" not in st.session_state:
 
 q_params = st.query_params
 
-if "pref_date" not in st.session_state:
-    st.session_state.pref_date = q_params.get("date", None)
+if "pref_date_mode" not in st.session_state:
+    st.session_state.pref_date_mode = q_params.get("dmode", "Latest Session")
+if "pref_start_date" not in st.session_state:
+    st.session_state.pref_start_date = q_params.get("start", None)
+if "pref_end_date" not in st.session_state:
+    st.session_state.pref_end_date = q_params.get("end", None)
 if "pref_only_watchlist" not in st.session_state:
     st.session_state.pref_only_watchlist = q_params.get("wl", "0") == "1"
 if "pref_strats" not in st.session_state:
@@ -361,7 +365,7 @@ def load_sheet_data():
 df_raw = load_sheet_data()
 
 # ----------------------------------------------------------------------
-# 6. SIDEBAR: PERSISTENT SETTINGS ACROSS SESSIONS
+# 6. SIDEBAR: DATE RANGE & PRESET CONTROLS (TODAY, THIS WEEK, ETC.)
 # ----------------------------------------------------------------------
 st.sidebar.markdown("### 🔍 Signal Filters")
 
@@ -369,6 +373,7 @@ if df_raw.empty:
     st.warning("No data found in Google Sheet. Run your scan script first.")
     st.stop()
 
+# Parse sheet dates into datetime objects
 available_dates = []
 for d_str in df_raw["Date"].dropna().unique():
     try:
@@ -376,30 +381,88 @@ for d_str in df_raw["Date"].dropna().unique():
     except ValueError:
         pass
 
-latest_date = max(available_dates) if available_dates else date.today()
-min_date = min(available_dates) if available_dates else date(2020, 1, 1)
-max_date = max(available_dates) if available_dates else date.today()
+latest_sheet_date = max(available_dates) if available_dates else date.today()
+min_sheet_date = min(available_dates) if available_dates else date(2020, 1, 1)
 
-target_init_date = latest_date
-if st.session_state.pref_date:
-    try:
-        parsed_p_date = datetime.strptime(st.session_state.pref_date, "%Y-%m-%d").date()
-        if min_date <= parsed_p_date <= max_date:
-            target_init_date = parsed_p_date
-    except ValueError:
-        pass
+# Period Presets
+preset_options = [
+    "Latest Session",
+    "Today",
+    "This Week",
+    "Last Week",
+    "Last 30 Days",
+    "All Available Dates",
+    "Custom Range"
+]
 
-picked_date = st.sidebar.date_input(
-    "Session Date",
-    value=target_init_date,
-    min_value=min_date,
-    max_value=max_date,
-    format="YYYY-MM-DD"
-)
+default_mode_idx = preset_options.index(st.session_state.pref_date_mode) if st.session_state.pref_date_mode in preset_options else 0
+selected_date_mode = st.sidebar.selectbox("Date Period", options=preset_options, index=default_mode_idx)
+st.session_state.pref_date_mode = selected_date_mode
 
-selected_date_str = picked_date.strftime("%Y-%m-%d")
-st.session_state.pref_date = selected_date_str
-df_day = df_raw[df_raw["Date"] == selected_date_str].copy()
+today_ref = date.today()
+
+# Compute start and end dates based on preset selection
+if selected_date_mode == "Latest Session":
+    filter_start = latest_sheet_date
+    filter_end = latest_sheet_date
+elif selected_date_mode == "Today":
+    filter_start = today_ref
+    filter_end = today_ref
+elif selected_date_mode == "This Week":
+    # Monday to Friday of current week
+    filter_start = today_ref - timedelta(days=today_ref.weekday())
+    filter_end = filter_start + timedelta(days=4)
+elif selected_date_mode == "Last Week":
+    # Monday to Friday of preceding week
+    filter_start = today_ref - timedelta(days=today_ref.weekday() + 7)
+    filter_end = filter_start + timedelta(days=4)
+elif selected_date_mode == "Last 30 Days":
+    filter_start = today_ref - timedelta(days=30)
+    filter_end = today_ref
+elif selected_date_mode == "All Available Dates":
+    filter_start = min_sheet_date
+    filter_end = latest_sheet_date
+else:  # Custom Range
+    # Restore previous custom range if saved
+    init_custom_start = min_sheet_date
+    init_custom_end = latest_sheet_date
+    if st.session_state.pref_start_date and st.session_state.pref_end_date:
+        try:
+            init_custom_start = datetime.strptime(st.session_state.pref_start_date, "%Y-%m-%d").date()
+            init_custom_end = datetime.strptime(st.session_state.pref_end_date, "%Y-%m-%d").date()
+        except ValueError:
+            pass
+
+    date_range_pick = st.sidebar.date_input(
+        "Select Range (Start & End)",
+        value=(init_custom_start, init_custom_end),
+        min_value=min_sheet_date,
+        max_value=latest_sheet_date + timedelta(days=1),
+        format="YYYY-MM-DD"
+    )
+
+    if isinstance(date_range_pick, tuple) and len(date_range_pick) == 2:
+        filter_start, filter_end = date_range_pick
+    elif isinstance(date_range_pick, tuple) and len(date_range_pick) == 1:
+        filter_start = date_range_pick[0]
+        filter_end = date_range_pick[0]
+    else:
+        filter_start = date_range_pick
+        filter_end = date_range_pick
+
+# Filter the DataFrame based on the active date range
+start_str = filter_start.strftime("%Y-%m-%d")
+end_str = filter_end.strftime("%Y-%m-%d")
+st.session_state.pref_start_date = start_str
+st.session_state.pref_end_date = end_str
+
+df_day = df_raw[(df_raw["Date"] >= start_str) & (df_raw["Date"] <= end_str)].copy()
+
+# Date display caption in sidebar
+if start_str == end_str:
+    st.sidebar.caption(f"📅 Active Date: `{start_str}`")
+else:
+    st.sidebar.caption(f"📅 Range: `{start_str}` to `{end_str}`")
 
 st.sidebar.markdown("---")
 only_watchlist = st.sidebar.checkbox(
@@ -459,7 +522,10 @@ min_dist_52wh = st.sidebar.slider(
 st.session_state.pref_dist = min_dist_52wh
 df_day = df_day[df_day["Dist_52WH"] >= min_dist_52wh]
 
-st.query_params["date"] = selected_date_str
+# Synchronize URL Query Parameters
+st.query_params["dmode"] = selected_date_mode
+st.query_params["start"] = start_str
+st.query_params["end"] = end_str
 st.query_params["wl"] = "1" if only_watchlist else "0"
 st.query_params["strats"] = ",".join(selected_strats)
 st.query_params["acts"] = ",".join(selected_actions)
@@ -491,7 +557,7 @@ tab_signals, tab_overview, tab_watchlist, tab_notes = st.tabs([
 # --- TAB 1: SIGNALS TABLE ---
 with tab_signals:
     if df_day.empty:
-        st.info(f"No signals match the filters for {selected_date_str}.")
+        st.info(f"No signals found for the period ({start_str} to {end_str}).")
     else:
         table_df = pd.DataFrame()
         table_df["Date"] = df_day["Date"].astype(str)
@@ -566,10 +632,10 @@ with tab_signals:
                 row_match = df_day[df_day["Symbol"] == chosen_sym].iloc[0]
                 open_note_modal(chosen_sym, row_match["Strategy"], format_indian_currency(row_match["LTP"], 2))
 
-# --- TAB 2: OVERVIEW CARDS (WITH GUARANTEED UNIQUE COMPONENT KEYS) ---
+# --- TAB 2: OVERVIEW CARDS ---
 with tab_overview:
     if active_setups.empty:
-        st.info(f"No active setups found matching filters for {selected_date_str}.")
+        st.info(f"No active setups found matching filters for the selected period.")
     else:
         cols_per_row = 4
         chunks = [active_setups.iloc[i:i + cols_per_row] for i in range(0, len(active_setups), cols_per_row)]
@@ -600,7 +666,6 @@ with tab_overview:
                                 unsafe_allow_html=True
                             )
                         with top_right:
-                            # Unique key incorporates symbol, strategy, and position counter
                             btn_key = f"card_star_{sym}_{strat_clean}_{global_card_counter}"
                             if st.button(star_icon, key=btn_key, help="Click to star/unstar"):
                                 if is_starred:
@@ -631,7 +696,7 @@ with tab_watchlist:
     if not st.session_state.watchlist_symbols:
         st.info("Your watchlist is currently empty. Star candidates from the **Signals Table** or **Overview Cards** to populate this list.")
     elif bookmarked_df.empty:
-        st.warning(f"None of your {len(st.session_state.watchlist_symbols)} starred stocks have signals recorded for {selected_date_str}.")
+        st.warning(f"None of your {len(st.session_state.watchlist_symbols)} starred stocks have signals recorded for the active date filter.")
         st.caption(f"Starred symbols: {', '.join(sorted(st.session_state.watchlist_symbols))}")
     else:
         if st.button("🗑️ Clear All Starred", key="btn_clear_wl"):
