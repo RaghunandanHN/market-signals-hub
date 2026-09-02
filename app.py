@@ -263,27 +263,6 @@ def sanitize_tv_url(symbol, formula_str=""):
     clean_sym = str(symbol).replace(".NS", "").replace("&", "_").replace("-", "_").strip().upper()
     return f"https://www.tradingview.com/chart/qQrGXVOL/?symbol=NSE:{clean_sym}&interval=D"
 
-# Styler function for Market Cap 3-tier background fill
-def style_mcap_background(series, raw_mcap_series):
-    styles = []
-    for idx in series.index:
-        val = raw_mcap_series.get(idx, 0.0)
-        try:
-            val = float(val)
-        except (ValueError, TypeError):
-            val = 0.0
-
-        if val >= 80000:
-            # Large Cap: Soft Pastel Blue
-            styles.append("background-color: #DCEAFE; color: #1E3A8A; font-weight: 600;")
-        elif val >= 20000:
-            # Mid Cap: Soft Pastel Violet
-            styles.append("background-color: #EDE9FE; color: #5B21B6; font-weight: 600;")
-        else:
-            # Small Cap: Soft Pastel Amber
-            styles.append("background-color: #FEF3C7; color: #92400E; font-weight: 600;")
-    return styles
-
 # ----------------------------------------------------------------------
 # 4. NOTE DIALOG POPUP
 # ----------------------------------------------------------------------
@@ -597,7 +576,7 @@ with tab_signals:
     if df_day.empty:
         st.info(f"No signals found for the period ({start_str} to {end_str}).")
     else:
-        # Build Table Data
+        # Build Clean DataFrame for Data Editor without external matplotlib stylers
         table_df = pd.DataFrame(index=df_day.index)
         table_df["Date"] = df_day["Date"].astype(str)
         table_df["Symbol"] = df_day["Symbol"].astype(str)
@@ -615,10 +594,8 @@ with tab_signals:
         table_df["R²"] = df_day["R2"].apply(lambda v: f"{v:.2f}")
         table_df["RSI"] = df_day["RSI"].apply(lambda v: f"{v:.0f}")
 
-        # Keep Turnover numeric for clean single-color background gradient
-        table_df["Turnover"] = df_day["Turnover_Cr"].round(1)
-
-        # Standard MCap without prefix or emojis
+        # Formatted cleanly without extra icon widgets or progress bars
+        table_df["Turnover"] = df_day["Turnover_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 1)}Cr")
         table_df["MCap"] = df_day["Market_Cap_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 0)}Cr")
 
         table_df["Vol"] = df_day["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
@@ -628,17 +605,39 @@ with tab_signals:
         table_df["📝"] = df_day["Symbol"].apply(lambda s: "📝" if s in st.session_state.signal_notes else "-")
         table_df["⭐"] = df_day["Symbol"].apply(lambda s: s in st.session_state.watchlist_symbols)
 
-        # Apply pure background color styling to DataFrame cells
-        raw_mcap = df_day["Market_Cap_Cr"]
-        styled_df = (
-            table_df.style
-            .background_gradient(subset=["Turnover"], cmap="PuBu", vmin=0)
-            .format({"Turnover": "₹{:.1f}Cr"})
-            .apply(lambda s: style_mcap_background(s, raw_mcap), subset=["MCap"])
-        )
+        # Pure Python Styler function for cell background colors
+        max_turnover = float(df_day["Turnover_Cr"].max()) if not df_day.empty else 1.0
+        max_turnover = max(max_turnover, 1.0)
+
+        def apply_pure_table_styles(df_in):
+            # Empty matrix of CSS styles matching table_df dimensions
+            styles_df = pd.DataFrame("", index=df_in.index, columns=df_in.columns)
+            
+            # Pure math hex generator for Turnover gradient (soft ice blue to deeper blue)
+            for idx in df_in.index:
+                t_val = df_day.loc[idx, "Turnover_Cr"]
+                ratio = min(max(t_val / max_turnover, 0.0), 1.0)
+                # Interpolate between #F8FAFC (white/slate) and #BAE6FD (soft sky blue)
+                r = int(248 - ratio * (248 - 186))
+                g = int(250 - ratio * (250 - 230))
+                b = int(252 - ratio * (252 - 253))
+                styles_df.loc[idx, "Turnover"] = f"background-color: rgb({r}, {g}, {b}); font-weight: 500;"
+
+                # Pure background fill for 3-tier Market Cap
+                m_val = df_day.loc[idx, "Market_Cap_Cr"]
+                if m_val >= 80000:
+                    styles_df.loc[idx, "MCap"] = "background-color: #DCEAFE; color: #1E3A8A; font-weight: 600;"
+                elif m_val >= 20000:
+                    styles_df.loc[idx, "MCap"] = "background-color: #EDE9FE; color: #5B21B6; font-weight: 600;"
+                else:
+                    styles_df.loc[idx, "MCap"] = "background-color: #FEF3C7; color: #92400E; font-weight: 600;"
+
+            return styles_df
+
+        styled_display = table_df.style.apply(apply_pure_table_styles, axis=None)
 
         edited_table = st.data_editor(
-            styled_df,
+            styled_display,
             column_config={
                 "Date": st.column_config.TextColumn("Date", width=85, alignment="center"),
                 "Symbol": st.column_config.TextColumn("Symbol", width=110, alignment="center"),
