@@ -13,37 +13,51 @@ st.set_page_config(
 )
 
 # ----------------------------------------------------------------------
-# 1. CLEAN STYLING & COMPACT METRICS
+# 1. COMPACT UI & ZERO-HORIZONTAL-SCROLL CSS
 # ----------------------------------------------------------------------
 st.markdown("""
 <style>
+    /* Drastically reduce container padding */
     .block-container {
-        padding-top: 2.2rem !important;
+        padding-top: 1.8rem !important;
         padding-bottom: 0.5rem !important;
-        padding-left: 1.5rem !important;
-        padding-right: 1.5rem !important;
+        padding-left: 1.0rem !important;
+        padding-right: 1.0rem !important;
+        max-width: 100% !important;
     }
     .dashboard-title {
-        font-size: 1.6rem;
+        font-size: 1.5rem;
         font-weight: 700;
-        margin-bottom: 0.3rem;
+        margin-bottom: 0.2rem;
         color: #1E293B;
     }
     div[data-testid="stMetric"] {
         padding: 0px !important;
-        margin-bottom: -0.4rem !important;
+        margin-bottom: -0.5rem !important;
     }
     div[data-testid="stMetricLabel"] > div {
-        font-size: 0.8rem !important;
+        font-size: 0.78rem !important;
         color: #64748B !important;
     }
     div[data-testid="stMetricValue"] > div {
-        font-size: 1.35rem !important;
+        font-size: 1.25rem !important;
         font-weight: 700 !important;
         line-height: 1.1 !important;
     }
+    
+    /* Prevent table horizontal scroll by squeezing font and padding */
+    div[data-testid="stDataFrame"] div[role="grid"] {
+        font-size: 0.78rem !important;
+    }
+    div[data-testid="stDataFrame"] div[role="columnheader"] {
+        font-size: 0.76rem !important;
+        font-weight: 700 !important;
+        padding: 2px 4px !important;
+    }
+
+    /* Compact Cards */
     .card-symbol-link {
-        font-size: 1.05rem;
+        font-size: 0.95rem;
         font-weight: 700;
         color: #1D4ED8 !important;
         text-decoration: none !important;
@@ -55,32 +69,32 @@ st.markdown("""
     .badge-ready {
         background-color: #DCFCE7;
         color: #15803D;
-        font-size: 0.72rem;
+        font-size: 0.68rem;
         font-weight: 600;
-        padding: 2px 6px;
+        padding: 1px 5px;
         border-radius: 4px;
         display: inline-block;
     }
     .badge-wait {
         background-color: #FEF9C3;
         color: #A16207;
-        font-size: 0.72rem;
+        font-size: 0.68rem;
         font-weight: 600;
-        padding: 2px 6px;
+        padding: 1px 5px;
         border-radius: 4px;
         display: inline-block;
     }
     .card-grid {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        column-gap: 8px;
-        row-gap: 3px;
-        font-size: 0.81rem;
-        margin-top: 6px;
+        column-gap: 6px;
+        row-gap: 2px;
+        font-size: 0.78rem;
+        margin-top: 4px;
     }
     .card-label {
         color: #64748B;
-        font-size: 0.75rem;
+        font-size: 0.72rem;
     }
     .card-val {
         font-weight: 600;
@@ -90,7 +104,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ----------------------------------------------------------------------
-# 2. STATE MANAGEMENT (WATCHLIST & PERSISTENT NOTES)
+# 2. STATE INITIALIZATION (WATCHLIST, NOTES & PERSISTENT PREFERENCES)
 # ----------------------------------------------------------------------
 if "watchlist_symbols" not in st.session_state:
     st.session_state.watchlist_symbols = set()
@@ -98,8 +112,32 @@ if "watchlist_symbols" not in st.session_state:
 if "signal_notes" not in st.session_state:
     st.session_state.signal_notes = {}
 
+# Read initial settings from URL Query Params or default session state
+q_params = st.query_params
+
+if "pref_date" not in st.session_state:
+    st.session_state.pref_date = q_params.get("date", None)
+if "pref_only_watchlist" not in st.session_state:
+    st.session_state.pref_only_watchlist = q_params.get("wl", "0") == "1"
+if "pref_strats" not in st.session_state:
+    saved_strats = q_params.get("strats", None)
+    st.session_state.pref_strats = saved_strats.split(",") if saved_strats else None
+if "pref_actions" not in st.session_state:
+    saved_acts = q_params.get("acts", None)
+    st.session_state.pref_actions = saved_acts.split(",") if saved_acts else None
+if "pref_risk" not in st.session_state:
+    try:
+        st.session_state.pref_risk = float(q_params.get("risk", 5.5))
+    except ValueError:
+        st.session_state.pref_risk = 5.5
+if "pref_dist" not in st.session_state:
+    try:
+        st.session_state.pref_dist = float(q_params.get("dist", -30.0))
+    except ValueError:
+        st.session_state.pref_dist = -30.0
+
 # ----------------------------------------------------------------------
-# 3. HELPER FUNCTIONS
+# 3. FORMATTING HELPERS
 # ----------------------------------------------------------------------
 def format_indian_currency(val, decimals=2, prefix=""):
     if pd.isna(val) or val == "" or val is None:
@@ -138,12 +176,10 @@ def format_indian_currency(val, decimals=2, prefix=""):
     return f"{sign}{prefix}{res}{dec_part}"
 
 def clean_date_str(val):
-    """Parses Google Sheets serial day numbers (e.g. 46262) or date strings to YYYY-MM-DD."""
     if pd.isna(val) or str(val).strip() in ["", "-", "N/A", "None"]:
         return "-"
     val_str = str(val).strip()
     
-    # Check if integer or float serial string (e.g. "46262" or "46262.0")
     numeric_candidate = None
     if val_str.isdigit():
         numeric_candidate = int(val_str)
@@ -162,7 +198,6 @@ def clean_date_str(val):
         except Exception:
             return val_str
 
-    # Parse standard date string representations
     for fmt in ("%d-%b-%Y", "%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"):
         try:
             return datetime.strptime(val_str, fmt).strftime("%Y-%m-%d")
@@ -172,7 +207,6 @@ def clean_date_str(val):
     return val_str
 
 def format_last_seen_time(val):
-    """Converts Sheets day fractions (0.57407...) or raw strings to HH:MM format."""
     if pd.isna(val) or val == "" or val is None:
         return "-"
     val_str = str(val).strip()
@@ -207,7 +241,7 @@ def sanitize_tv_url(symbol, formula_str=""):
     return f"https://www.tradingview.com/chart/qQrGXVOL/?symbol=NSE:{clean_sym}&interval=D"
 
 # ----------------------------------------------------------------------
-# 4. DATA INGESTION
+# 4. DATA INGESTION ENGINE
 # ----------------------------------------------------------------------
 @st.cache_data(ttl=15)
 def load_sheet_data():
@@ -258,7 +292,6 @@ def load_sheet_data():
         else:
             df["Last_Seen"] = "-"
 
-        # Converts 52W High serial numbers (46262, 45923) into clean dates
         if "High_52W_Date" in df.columns:
             df["High_52W_Date"] = df["High_52W_Date"].apply(clean_date_str)
         else:
@@ -287,7 +320,7 @@ def load_sheet_data():
 df_raw = load_sheet_data()
 
 # ----------------------------------------------------------------------
-# 5. SIDEBAR FILTERS
+# 5. SIDEBAR: PERSISTENT SETTINGS ACROSS SESSIONS
 # ----------------------------------------------------------------------
 st.sidebar.markdown("### 🔍 Signal Filters")
 
@@ -302,41 +335,79 @@ for d_str in df_raw["Date"].dropna().unique():
     except ValueError:
         pass
 
-default_date = max(available_dates) if available_dates else date.today()
+latest_date = max(available_dates) if available_dates else date.today()
 min_date = min(available_dates) if available_dates else date(2020, 1, 1)
 max_date = max(available_dates) if available_dates else date.today()
 
+# Restore saved date
+target_init_date = latest_date
+if st.session_state.pref_date:
+    try:
+        parsed_p_date = datetime.strptime(st.session_state.pref_date, "%Y-%m-%d").date()
+        if min_date <= parsed_p_date <= max_date:
+            target_init_date = parsed_p_date
+    except ValueError:
+        pass
+
 picked_date = st.sidebar.date_input(
     "Session Date",
-    value=default_date,
+    value=target_init_date,
     min_value=min_date,
     max_value=max_date,
     format="YYYY-MM-DD"
 )
 
 selected_date_str = picked_date.strftime("%Y-%m-%d")
+st.session_state.pref_date = selected_date_str
 df_day = df_raw[df_raw["Date"] == selected_date_str].copy()
 
 st.sidebar.markdown("---")
 only_watchlist = st.sidebar.checkbox(
     f"⭐ Show Watchlist Only ({len(st.session_state.watchlist_symbols)})", 
-    value=False,
+    value=st.session_state.pref_only_watchlist,
     help="Filters all views down to starred candidates only"
 )
+st.session_state.pref_only_watchlist = only_watchlist
 if only_watchlist:
     df_day = df_day[df_day["Symbol"].isin(st.session_state.watchlist_symbols)]
 
+# Section 1: Strategy Selection
 st.sidebar.markdown("**Strategy Selection**")
 all_strats = sorted([str(s) for s in df_raw["Strategy"].dropna().unique()])
 
 selected_strats = []
 for strat in all_strats:
-    if st.sidebar.checkbox(strat, value=True, key=f"chk_{strat}"):
+    default_chk = True if st.session_state.pref_strats is None else (strat in st.session_state.pref_strats)
+    if st.sidebar.checkbox(strat, value=default_chk, key=f"chk_strat_{strat}"):
         selected_strats.append(strat)
 
+st.session_state.pref_strats = selected_strats
 df_day = df_day[df_day["Strategy"].isin(selected_strats)]
 
-max_risk = st.sidebar.slider("Max Risk (%)", min_value=0.5, max_value=6.0, value=5.5, step=0.1)
+# Section 2: Action Selection
+st.sidebar.markdown("**Action Selection**")
+all_actions = sorted([str(a) for a in df_raw["Action"].dropna().unique() if str(a).strip()])
+
+selected_actions = []
+for action_name in all_actions:
+    default_act_chk = True if st.session_state.pref_actions is None else (action_name in st.session_state.pref_actions)
+    if st.sidebar.checkbox(action_name, value=default_act_chk, key=f"chk_act_{action_name}"):
+        selected_actions.append(action_name)
+
+st.session_state.pref_actions = selected_actions
+df_day = df_day[df_day["Action"].isin(selected_actions)]
+
+st.sidebar.markdown("---")
+
+# Sliders with persistence
+max_risk = st.sidebar.slider(
+    "Max Risk (%)", 
+    min_value=0.5, 
+    max_value=6.0, 
+    value=st.session_state.pref_risk, 
+    step=0.1
+)
+st.session_state.pref_risk = max_risk
 df_day = df_day[df_day["Risk_Pct"] <= max_risk]
 
 dist_min = float(round(df_raw["Dist_52WH"].min() - 1, 0)) if not df_raw.empty else -30.0
@@ -345,14 +416,22 @@ min_dist_52wh = st.sidebar.slider(
     "Max Pullback from 52WH (%)", 
     min_value=dist_min, 
     max_value=0.0, 
-    value=dist_min, 
-    step=0.5,
-    help="Filters out stocks that dropped more than this % from 52-week high"
+    value=st.session_state.pref_dist, 
+    step=0.5
 )
+st.session_state.pref_dist = min_dist_52wh
 df_day = df_day[df_day["Dist_52WH"] >= min_dist_52wh]
 
+# Sync state to URL Query Parameters so refresh retains settings
+st.query_params["date"] = selected_date_str
+st.query_params["wl"] = "1" if only_watchlist else "0"
+st.query_params["strats"] = ",".join(selected_strats)
+st.query_params["acts"] = ",".join(selected_actions)
+st.query_params["risk"] = str(max_risk)
+st.query_params["dist"] = str(min_dist_52wh)
+
 # ----------------------------------------------------------------------
-# 6. TOP HEADER & METRIC SUMMARY
+# 6. TOP HEADER & KPI METRICS
 # ----------------------------------------------------------------------
 st.markdown("<div class=\"dashboard-title\">📊 Market Signals Hub</div>", unsafe_allow_html=True)
 
@@ -364,82 +443,82 @@ kpi3.metric("AVWAP Bounces", len(df_day[df_day["Strategy"] == "AVWAP Bounce"]))
 kpi4.metric("Liquidity Sweeps", len(df_day[df_day["Strategy"] == "Liquidity Sweep"]))
 
 # ----------------------------------------------------------------------
-# 7. WORKSPACE TABS
+# 7. WORKSPACE TABS (CONDENSED TO PREVENT HORIZONTAL SCROLL)
 # ----------------------------------------------------------------------
 tab_signals, tab_overview, tab_watchlist, tab_notes = st.tabs([
-    f"📋 Signals Table ({len(df_day)})", 
-    f"📌 Overview Cards ({len(active_setups)})", 
+    f"📋 Signals ({len(df_day)})", 
+    f"📌 Cards ({len(active_setups)})", 
     f"⭐ Watchlist ({len(st.session_state.watchlist_symbols)})",
     f"📝 Notes ({len(st.session_state.signal_notes)})"
 ])
 
-# --- TAB 1: SIGNALS TABLE ---
+# --- TAB 1: SIGNALS TABLE (AUTO-FIT, ZERO HORIZONTAL SCROLL) ---
 with tab_signals:
     if df_day.empty:
         st.info(f"No signals match the filters for {selected_date_str}.")
     else:
-        st.caption("💡 *Edit '📝 My Note' directly to save notes. Check '⭐ Star' in the last column to add/remove from Watchlist.*")
+        st.caption("💡 *Edit '📝 Note' to save observations. Check '⭐' to add to Watchlist.*")
 
         table_df = pd.DataFrame()
         table_df["Date"] = df_day["Date"].astype(str)
         table_df["Symbol"] = df_day["Symbol"].astype(str)
         table_df["Strategy"] = df_day["Strategy"].astype(str)
         table_df["Action"] = df_day["Action"].astype(str)
-        table_df["Alert_Count"] = df_day["Alert_Count"].astype(int)
-        table_df["Last_Seen"] = df_day["Last_Seen"].astype(str)
+        table_df["Hits"] = df_day["Alert_Count"].astype(int)
+        table_df["Time"] = df_day["Last_Seen"].astype(str)
 
         table_df["LTP"] = df_day["LTP"].apply(lambda v: format_indian_currency(v, 2, "₹"))
-        table_df["Stop_Loss"] = df_day["Stop_Loss"].apply(lambda v: format_indian_currency(v, 2, "₹"))
-        table_df["Risk_Pct"] = df_day["Risk_Pct"].apply(lambda v: f"{v:.2f}%")
-        table_df["High_52W"] = df_day["High_52W"].apply(lambda v: format_indian_currency(v, 2, "₹"))
-        table_df["High_52W_Date"] = df_day["High_52W_Date"].astype(str)
-        table_df["Dist_52WH"] = df_day["Dist_52WH"].apply(lambda v: f"{v:.2f}%")
-        table_df["R2"] = df_day["R2"].apply(lambda v: f"{v:.2f}")
-        table_df["RSI"] = df_day["RSI"].apply(lambda v: f"{v:.1f}")
-        table_df["Turnover_Cr"] = df_day["Turnover_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 1)} Cr")
-        table_df["Market_Cap_Cr"] = df_day["Market_Cap_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 0)} Cr")
-        table_df["Today_Volume"] = df_day["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
-        table_df["Avg_1W_Volume"] = df_day["Avg_1W_Volume"].apply(lambda v: format_indian_currency(v, 0))
-        table_df["TradingView_URL"] = df_day["TradingView_URL"]
-        table_df["📝 My Note"] = df_day["Symbol"].apply(lambda s: st.session_state.signal_notes.get(s, {}).get("note", ""))
-        table_df["⭐ Star"] = df_day["Symbol"].apply(lambda s: s in st.session_state.watchlist_symbols)
+        table_df["SL"] = df_day["Stop_Loss"].apply(lambda v: format_indian_currency(v, 2, "₹"))
+        table_df["Risk%"] = df_day["Risk_Pct"].apply(lambda v: f"{v:.1f}%")
+        table_df["52WH"] = df_day["High_52W"].apply(lambda v: format_indian_currency(v, 1, "₹"))
+        table_df["52W Date"] = df_day["High_52W_Date"].astype(str)
+        table_df["Dist%"] = df_day["Dist_52WH"].apply(lambda v: f"{v:.1f}%")
+        table_df["R²"] = df_day["R2"].apply(lambda v: f"{v:.2f}")
+        table_df["RSI"] = df_day["RSI"].apply(lambda v: f"{v:.0f}")
+        table_df["Turnover"] = df_day["Turnover_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 1)}Cr")
+        table_df["MCap"] = df_day["Market_Cap_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 0)}Cr")
+        table_df["Vol"] = df_day["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
+        table_df["1W Vol"] = df_day["Avg_1W_Volume"].apply(lambda v: format_indian_currency(v, 0))
+        table_df["Chart"] = df_day["TradingView_URL"]
+        table_df["📝 Note"] = df_day["Symbol"].apply(lambda s: st.session_state.signal_notes.get(s, {}).get("note", ""))
+        table_df["⭐"] = df_day["Symbol"].apply(lambda s: s in st.session_state.watchlist_symbols)
 
         edited_table = st.data_editor(
             table_df,
             column_config={
-                "Date": st.column_config.TextColumn("Date", alignment="center"),
-                "Symbol": st.column_config.TextColumn("Symbol", alignment="center"),
-                "Strategy": st.column_config.TextColumn("Strategy", alignment="center"),
-                "Action": st.column_config.TextColumn("Action", alignment="center"),
-                "Alert_Count": st.column_config.NumberColumn("Alert Count", alignment="center"),
-                "Last_Seen": st.column_config.TextColumn("Last Seen", alignment="center"),
-                "LTP": st.column_config.TextColumn("LTP (₹)", alignment="center"),
-                "Stop_Loss": st.column_config.TextColumn("Stop Loss", alignment="center"),
-                "Risk_Pct": st.column_config.TextColumn("Risk (%)", alignment="center"),
-                "High_52W": st.column_config.TextColumn("52W High", alignment="center"),
-                "High_52W_Date": st.column_config.TextColumn("52W High Date", alignment="center"),
-                "Dist_52WH": st.column_config.TextColumn("Dist 52WH", alignment="center"),
-                "R2": st.column_config.TextColumn("R²", alignment="center"),
-                "RSI": st.column_config.TextColumn("RSI", alignment="center"),
-                "Turnover_Cr": st.column_config.TextColumn("Turnover", alignment="center"),
-                "Market_Cap_Cr": st.column_config.TextColumn("MCap (₹Cr)", alignment="center"),
-                "Today_Volume": st.column_config.TextColumn("Today Vol", alignment="center"),
-                "Avg_1W_Volume": st.column_config.TextColumn("1W Avg Vol", alignment="center"),
-                "TradingView_URL": st.column_config.LinkColumn("Chart", display_text="Open ↗", alignment="center"),
-                "📝 My Note": st.column_config.TextColumn("📝 My Note", width="medium"),
-                "⭐ Star": st.column_config.CheckboxColumn("⭐ Star", default=False)
+                "Date": st.column_config.TextColumn("Date", width="small", alignment="center"),
+                "Symbol": st.column_config.TextColumn("Symbol", width="small", alignment="center"),
+                "Strategy": st.column_config.TextColumn("Strategy", width="small", alignment="center"),
+                "Action": st.column_config.TextColumn("Action", width="small", alignment="center"),
+                "Hits": st.column_config.NumberColumn("Hits", width="small", alignment="center"),
+                "Time": st.column_config.TextColumn("Time", width="small", alignment="center"),
+                "LTP": st.column_config.TextColumn("LTP", width="small", alignment="center"),
+                "SL": st.column_config.TextColumn("SL", width="small", alignment="center"),
+                "Risk%": st.column_config.TextColumn("Risk%", width="small", alignment="center"),
+                "52WH": st.column_config.TextColumn("52WH", width="small", alignment="center"),
+                "52W Date": st.column_config.TextColumn("52W Date", width="small", alignment="center"),
+                "Dist%": st.column_config.TextColumn("Dist%", width="small", alignment="center"),
+                "R²": st.column_config.TextColumn("R²", width="small", alignment="center"),
+                "RSI": st.column_config.TextColumn("RSI", width="small", alignment="center"),
+                "Turnover": st.column_config.TextColumn("Turnover", width="small", alignment="center"),
+                "MCap": st.column_config.TextColumn("MCap", width="small", alignment="center"),
+                "Vol": st.column_config.TextColumn("Vol", width="small", alignment="center"),
+                "1W Vol": st.column_config.TextColumn("1W Vol", width="small", alignment="center"),
+                "Chart": st.column_config.LinkColumn("Chart", width="small", display_text="Open ↗", alignment="center"),
+                "📝 Note": st.column_config.TextColumn("📝 Note", width="medium"),
+                "⭐": st.column_config.CheckboxColumn("⭐", width="small", default=False)
             },
-            disabled=[c for c in table_df.columns if c not in ["⭐ Star", "📝 My Note"]],
+            disabled=[c for c in table_df.columns if c not in ["⭐", "📝 Note"]],
             hide_index=True,
             use_container_width=True,
-            height=650,
+            height=660,
             key="signals_data_editor"
         )
 
         for _, r in edited_table.iterrows():
             sym = r["Symbol"]
-            is_st = bool(r["⭐ Star"])
-            user_note = str(r["📝 My Note"]).strip()
+            is_st = bool(r["⭐"])
+            user_note = str(r["📝 Note"]).strip()
 
             if is_st:
                 st.session_state.watchlist_symbols.add(sym)
@@ -456,7 +535,7 @@ with tab_signals:
             elif sym in st.session_state.signal_notes and not user_note:
                 st.session_state.signal_notes.pop(sym, None)
 
-# --- TAB 2: OVERVIEW CARDS ---
+# --- TAB 2: OVERVIEW CARDS (CLEAN 4-COLUMN RESPONSIVE GRID) ---
 with tab_overview:
     if active_setups.empty:
         st.info(f"No active setups found matching filters for {selected_date_str}.")
@@ -497,15 +576,15 @@ with tab_overview:
                             <div><span class="card-label">LTP:</span> <span class="card-val">{format_indian_currency(row['LTP'], 2, '₹')}</span></div>
                             <div><span class="card-label">Risk:</span> <span class="card-val">{row['Risk_Pct']:.2f}%</span></div>
                             <div><span class="card-label">SL:</span> <span class="card-val">{format_indian_currency(row['Stop_Loss'], 2, '₹')}</span></div>
-                            <div><span class="card-label">R² / RSI:</span> <span class="card-val">{row['R2']:.2f} | {row['RSI']:.0f}</span></div>
+                            <div><span class="card-label">R²/RSI:</span> <span class="card-val">{row['R2']:.2f}|{row['RSI']:.0f}</span></div>
                             <div><span class="card-label">52WH:</span> <span class="card-val">{format_indian_currency(row['High_52W'], 1, '₹')}</span></div>
                             <div><span class="card-label">Dist:</span> <span class="card-val">{row['Dist_52WH']:.1f}%</span></div>
                             <div><span class="card-label">Vol:</span> <span class="card-val">{format_indian_currency(row['Today_Volume'], 0)}</span></div>
-                            <div><span class="card-label">MCap:</span> <span class="card-val">{format_indian_currency(row['Market_Cap_Cr'], 0, '₹')} Cr</span></div>
+                            <div><span class="card-label">MCap:</span> <span class="card-val">{format_indian_currency(row['Market_Cap_Cr'], 0, '₹')}Cr</span></div>
                         </div>
                         """, unsafe_allow_html=True)
 
-# --- TAB 3: WATCHLIST ---
+# --- TAB 3: WATCHLIST (ZERO HORIZONTAL SCROLL) ---
 with tab_watchlist:
     st.markdown(f"### ⭐ Shortlisted Watchlist ({len(st.session_state.watchlist_symbols)})")
     
@@ -526,42 +605,42 @@ with tab_watchlist:
         watch_display["Strategy"] = bookmarked_df["Strategy"].astype(str)
         watch_display["Action"] = bookmarked_df["Action"].astype(str)
         watch_display["LTP"] = bookmarked_df["LTP"].apply(lambda v: format_indian_currency(v, 2, "₹"))
-        watch_display["Stop_Loss"] = bookmarked_df["Stop_Loss"].apply(lambda v: format_indian_currency(v, 2, "₹"))
-        watch_display["Risk_Pct"] = bookmarked_df["Risk_Pct"].apply(lambda v: f"{v:.2f}%")
-        watch_display["52W High"] = bookmarked_df["High_52W"].apply(lambda v: format_indian_currency(v, 2, "₹"))
-        watch_display["52W High Date"] = bookmarked_df["High_52W_Date"].astype(str)
-        watch_display["Dist 52WH"] = bookmarked_df["Dist_52WH"].apply(lambda v: f"{v:.2f}%")
-        watch_display["Today Vol"] = bookmarked_df["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
-        watch_display["Market Cap"] = bookmarked_df["Market_Cap_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 0)} Cr")
+        watch_display["SL"] = bookmarked_df["Stop_Loss"].apply(lambda v: format_indian_currency(v, 2, "₹"))
+        watch_display["Risk%"] = bookmarked_df["Risk_Pct"].apply(lambda v: f"{v:.2f}%")
+        watch_display["52WH"] = bookmarked_df["High_52W"].apply(lambda v: format_indian_currency(v, 2, "₹"))
+        watch_display["52W Date"] = bookmarked_df["High_52W_Date"].astype(str)
+        watch_display["Dist%"] = bookmarked_df["Dist_52WH"].apply(lambda v: f"{v:.2f}%")
+        watch_display["Vol"] = bookmarked_df["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
+        watch_display["MCap"] = bookmarked_df["Market_Cap_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 0)}Cr")
         watch_display["Chart"] = bookmarked_df["TradingView_URL"]
 
         st.dataframe(
             watch_display,
             column_config={
-                "Symbol": st.column_config.TextColumn("Symbol", alignment="center"),
-                "Strategy": st.column_config.TextColumn("Strategy", alignment="center"),
-                "Action": st.column_config.TextColumn("Action", alignment="center"),
-                "LTP": st.column_config.TextColumn("LTP", alignment="center"),
-                "Stop_Loss": st.column_config.TextColumn("Stop Loss", alignment="center"),
-                "Risk_Pct": st.column_config.TextColumn("Risk", alignment="center"),
-                "52W High": st.column_config.TextColumn("52W High", alignment="center"),
-                "52W High Date": st.column_config.TextColumn("52WH Date", alignment="center"),
-                "Dist 52WH": st.column_config.TextColumn("Dist 52WH", alignment="center"),
-                "Today Vol": st.column_config.TextColumn("Today Vol", alignment="center"),
-                "Market Cap": st.column_config.TextColumn("Market Cap", alignment="center"),
-                "Chart": st.column_config.LinkColumn("TradingView Chart", display_text="Open ↗", alignment="center")
+                "Symbol": st.column_config.TextColumn("Symbol", width="small", alignment="center"),
+                "Strategy": st.column_config.TextColumn("Strategy", width="small", alignment="center"),
+                "Action": st.column_config.TextColumn("Action", width="small", alignment="center"),
+                "LTP": st.column_config.TextColumn("LTP", width="small", alignment="center"),
+                "SL": st.column_config.TextColumn("SL", width="small", alignment="center"),
+                "Risk%": st.column_config.TextColumn("Risk%", width="small", alignment="center"),
+                "52WH": st.column_config.TextColumn("52WH", width="small", alignment="center"),
+                "52W Date": st.column_config.TextColumn("52W Date", width="small", alignment="center"),
+                "Dist%": st.column_config.TextColumn("Dist%", width="small", alignment="center"),
+                "Vol": st.column_config.TextColumn("Vol", width="small", alignment="center"),
+                "MCap": st.column_config.TextColumn("MCap", width="small", alignment="center"),
+                "Chart": st.column_config.LinkColumn("Chart", width="small", display_text="Open ↗", alignment="center")
             },
             hide_index=True,
             use_container_width=True,
             height=450
         )
 
-# --- TAB 4: SIGNAL NOTES DIRECTORY ---
+# --- TAB 4: SIGNAL NOTES DIRECTORY (FIT SCREEN) ---
 with tab_notes:
     st.markdown(f"### 📝 Saved Trade Notes ({len(st.session_state.signal_notes)})")
 
     if not st.session_state.signal_notes:
-        st.info("No trade notes saved yet. Type a note directly into the '📝 My Note' column of the Signals Table to record trade plans.")
+        st.info("No trade notes saved yet. Type directly in the '📝 Note' column of the Signals Table to record trade plans.")
     else:
         note_rows = []
         for sym, data in st.session_state.signal_notes.items():
@@ -569,9 +648,9 @@ with tab_notes:
             note_rows.append({
                 "Symbol": sym,
                 "Strategy": data.get("strategy", "-"),
-                "LTP (₹)": data.get("ltp", "-"),
+                "LTP": data.get("ltp", "-"),
                 "Note": data.get("note", ""),
-                "Last Updated": data.get("updated_at", "-"),
+                "Updated At": data.get("updated_at", "-"),
                 "Chart": tv_link
             })
 
@@ -580,12 +659,12 @@ with tab_notes:
         st.dataframe(
             notes_df,
             column_config={
-                "Symbol": st.column_config.TextColumn("Symbol", alignment="center"),
-                "Strategy": st.column_config.TextColumn("Strategy", alignment="center"),
-                "LTP (₹)": st.column_config.TextColumn("LTP", alignment="center"),
+                "Symbol": st.column_config.TextColumn("Symbol", width="small", alignment="center"),
+                "Strategy": st.column_config.TextColumn("Strategy", width="small", alignment="center"),
+                "LTP": st.column_config.TextColumn("LTP", width="small", alignment="center"),
                 "Note": st.column_config.TextColumn("Observation / Trade Plan", width="large"),
-                "Last Updated": st.column_config.TextColumn("Updated At", alignment="center"),
-                "Chart": st.column_config.LinkColumn("TradingView", display_text="Open ↗", alignment="center")
+                "Updated At": st.column_config.TextColumn("Updated At", width="small", alignment="center"),
+                "Chart": st.column_config.LinkColumn("TradingView", width="small", display_text="Open ↗", alignment="center")
             },
             hide_index=True,
             use_container_width=True,
