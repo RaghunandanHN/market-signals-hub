@@ -13,27 +13,27 @@ st.set_page_config(
 )
 
 # ----------------------------------------------------------------------
-# 1. CLEAN UI, PROMINENT HOVER/SELECTION & SAFE TOP-PADDING STYLING
+# 1. CLEAN UI & COMPACT VIEWPORT STYLING
 # ----------------------------------------------------------------------
 st.markdown("""
 <style>
-    /* Prevent Streamlit Cloud top navbar from overlapping title */
+    /* Prevent Streamlit Cloud top navbar overlap */
     header[data-testid="stHeader"] {
         background: transparent !important;
         height: 2.2rem !important;
         z-index: 1 !important;
     }
 
-    /* Safe container padding clears the fixed cloud bar cleanly */
+    /* Safe container padding */
     .block-container {
         padding-top: 3.8rem !important;
         padding-bottom: 0.5rem !important;
-        padding-left: 1.2rem !important;
-        padding-right: 1.2rem !important;
+        padding-left: 1.0rem !important;
+        padding-right: 1.0rem !important;
         max-width: 100% !important;
     }
 
-    /* Title Styling */
+    /* Compact Title */
     .dashboard-title {
         font-size: 1.6rem;
         font-weight: 700;
@@ -43,7 +43,7 @@ st.markdown("""
         line-height: 1.2;
     }
 
-    /* Compact Metrics */
+    /* Compact Top Metrics */
     div[data-testid="stMetric"] {
         padding: 0px !important;
         margin-bottom: -0.4rem !important;
@@ -68,10 +68,7 @@ st.markdown("""
         padding: 2px 4px !important;
     }
 
-    /* Darker row hover indicator */
-    div[data-testid="stDataFrame"] canvas {
-        cursor: pointer;
-    }
+    /* Table Hover & Selected Cell Accents */
     div[data-testid="stDataFrame"] {
         --gdg-accent-color: #3B82F6 !important;
         --gdg-bg-cell-selected: #E0E7FF !important;
@@ -201,23 +198,6 @@ def format_indian_currency(val, decimals=2, prefix=""):
     sign = "-" if is_negative else ""
     return f"{sign}{prefix}{res}{dec_part}"
 
-def categorize_market_cap(mcap_val):
-    """Categorizes market cap into 3 clearly marked tiers with formatted values."""
-    if pd.isna(mcap_val) or mcap_val == "" or mcap_val is None:
-        return "-"
-    try:
-        val = float(mcap_val)
-    except (ValueError, TypeError):
-        return str(mcap_val)
-
-    formatted_num = format_indian_currency(val, 0)
-    if val >= 80000:
-        return f"💎 Large: ₹{formatted_num}Cr"
-    elif val >= 20000:
-        return f"🔷 Mid: ₹{formatted_num}Cr"
-    else:
-        return f"🔸 Small: ₹{formatted_num}Cr"
-
 def clean_date_str(val):
     if pd.isna(val) or str(val).strip() in ["", "-", "N/A", "None"]:
         return "-"
@@ -282,6 +262,27 @@ def sanitize_tv_url(symbol, formula_str=""):
 
     clean_sym = str(symbol).replace(".NS", "").replace("&", "_").replace("-", "_").strip().upper()
     return f"https://www.tradingview.com/chart/qQrGXVOL/?symbol=NSE:{clean_sym}&interval=D"
+
+# Styler function for Market Cap 3-tier background fill
+def style_mcap_background(series, raw_mcap_series):
+    styles = []
+    for idx in series.index:
+        val = raw_mcap_series.get(idx, 0.0)
+        try:
+            val = float(val)
+        except (ValueError, TypeError):
+            val = 0.0
+
+        if val >= 80000:
+            # Large Cap: Soft Pastel Blue
+            styles.append("background-color: #DCEAFE; color: #1E3A8A; font-weight: 600;")
+        elif val >= 20000:
+            # Mid Cap: Soft Pastel Violet
+            styles.append("background-color: #EDE9FE; color: #5B21B6; font-weight: 600;")
+        else:
+            # Small Cap: Soft Pastel Amber
+            styles.append("background-color: #FEF3C7; color: #92400E; font-weight: 600;")
+    return styles
 
 # ----------------------------------------------------------------------
 # 4. NOTE DIALOG POPUP
@@ -596,10 +597,8 @@ with tab_signals:
     if df_day.empty:
         st.info(f"No signals found for the period ({start_str} to {end_str}).")
     else:
-        max_turnover = float(df_day["Turnover_Cr"].max()) if not df_day.empty else 1000.0
-        max_turnover = max(max_turnover, 100.0)
-
-        table_df = pd.DataFrame()
+        # Build Table Data
+        table_df = pd.DataFrame(index=df_day.index)
         table_df["Date"] = df_day["Date"].astype(str)
         table_df["Symbol"] = df_day["Symbol"].astype(str)
         table_df["Strategy"] = df_day["Strategy"].astype(str)
@@ -615,12 +614,12 @@ with tab_signals:
         table_df["Dist%"] = df_day["Dist_52WH"].apply(lambda v: f"{v:.1f}%")
         table_df["R²"] = df_day["R2"].apply(lambda v: f"{v:.2f}")
         table_df["RSI"] = df_day["RSI"].apply(lambda v: f"{v:.0f}")
-        
-        # Numeric Turnover used for single-color heat map column
-        table_df["Turnover (₹Cr)"] = df_day["Turnover_Cr"].round(1)
-        
-        # 3-Category Market Cap formatting
-        table_df["MCap"] = df_day["Market_Cap_Cr"].apply(categorize_market_cap)
+
+        # Keep Turnover numeric for clean single-color background gradient
+        table_df["Turnover"] = df_day["Turnover_Cr"].round(1)
+
+        # Standard MCap without prefix or emojis
+        table_df["MCap"] = df_day["Market_Cap_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 0)}Cr")
 
         table_df["Vol"] = df_day["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
         table_df["1W Vol"] = df_day["Avg_1W_Volume"].apply(lambda v: format_indian_currency(v, 0))
@@ -629,8 +628,17 @@ with tab_signals:
         table_df["📝"] = df_day["Symbol"].apply(lambda s: "📝" if s in st.session_state.signal_notes else "-")
         table_df["⭐"] = df_day["Symbol"].apply(lambda s: s in st.session_state.watchlist_symbols)
 
+        # Apply pure background color styling to DataFrame cells
+        raw_mcap = df_day["Market_Cap_Cr"]
+        styled_df = (
+            table_df.style
+            .background_gradient(subset=["Turnover"], cmap="PuBu", vmin=0)
+            .format({"Turnover": "₹{:.1f}Cr"})
+            .apply(lambda s: style_mcap_background(s, raw_mcap), subset=["MCap"])
+        )
+
         edited_table = st.data_editor(
-            table_df,
+            styled_df,
             column_config={
                 "Date": st.column_config.TextColumn("Date", width=85, alignment="center"),
                 "Symbol": st.column_config.TextColumn("Symbol", width=110, alignment="center"),
@@ -646,20 +654,8 @@ with tab_signals:
                 "Dist%": st.column_config.TextColumn("Dist%", width=65, alignment="center"),
                 "R²": st.column_config.TextColumn("R²", width=50, alignment="center"),
                 "RSI": st.column_config.TextColumn("RSI", width=50, alignment="center"),
-                "Turnover (₹Cr)": st.column_config.ProgressColumn(
-                    "Turnover (₹Cr)",
-                    help="Institutional Turnover heatmap within the day's signals",
-                    format="₹%.1f Cr",
-                    min_value=0.0,
-                    max_value=max_turnover,
-                    width=110
-                ),
-                "MCap": st.column_config.TextColumn(
-                    "MCap (Large/Mid/Small)", 
-                    help="💎 Large > 80k Cr | 🔷 Mid 20k-80k Cr | 🔸 Small < 20k Cr", 
-                    width=135, 
-                    alignment="center"
-                ),
+                "Turnover": st.column_config.TextColumn("Turnover", width=75, alignment="center"),
+                "MCap": st.column_config.TextColumn("MCap", width=85, alignment="center"),
                 "Vol": st.column_config.TextColumn("Vol", width=80, alignment="center"),
                 "1W Vol": st.column_config.TextColumn("1W Vol", width=80, alignment="center"),
                 "Chart": st.column_config.LinkColumn("Chart", width=65, display_text="Open ↗", alignment="center"),
@@ -740,7 +736,7 @@ with tab_overview:
                             <div><span class="card-label">52WH:</span> <span class="card-val">{format_indian_currency(row['High_52W'], 1, '₹')}</span></div>
                             <div><span class="card-label">Dist:</span> <span class="card-val">{row['Dist_52WH']:.1f}%</span></div>
                             <div><span class="card-label">Vol:</span> <span class="card-val">{format_indian_currency(row['Today_Volume'], 0)}</span></div>
-                            <div><span class="card-label">MCap:</span> <span class="card-val">{categorize_market_cap(row['Market_Cap_Cr'])}</span></div>
+                            <div><span class="card-label">MCap:</span> <span class="card-val">₹{format_indian_currency(row['Market_Cap_Cr'], 0)}Cr</span></div>
                         </div>
                         """, unsafe_allow_html=True)
 
@@ -771,7 +767,7 @@ with tab_watchlist:
         watch_display["52W Date"] = bookmarked_df["High_52W_Date"].astype(str)
         watch_display["Dist%"] = bookmarked_df["Dist_52WH"].apply(lambda v: f"{v:.2f}%")
         watch_display["Vol"] = bookmarked_df["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
-        watch_display["MCap"] = bookmarked_df["Market_Cap_Cr"].apply(categorize_market_cap)
+        watch_display["MCap"] = bookmarked_df["Market_Cap_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 0)}Cr")
         watch_display["Chart"] = bookmarked_df["TradingView_URL"]
 
         st.dataframe(
@@ -787,7 +783,7 @@ with tab_watchlist:
                 "52W Date": st.column_config.TextColumn("52W Date", width=85, alignment="center"),
                 "Dist%": st.column_config.TextColumn("Dist%", width=65, alignment="center"),
                 "Vol": st.column_config.TextColumn("Vol", width=80, alignment="center"),
-                "MCap": st.column_config.TextColumn("MCap Tier", width=135, alignment="center"),
+                "MCap": st.column_config.TextColumn("MCap", width=85, alignment="center"),
                 "Chart": st.column_config.LinkColumn("Chart", width=65, display_text="Open ↗", alignment="center")
             },
             hide_index=True,
