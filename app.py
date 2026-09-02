@@ -365,7 +365,7 @@ def load_sheet_data():
 df_raw = load_sheet_data()
 
 # ----------------------------------------------------------------------
-# 6. SIDEBAR: DATE RANGE & PRESET CONTROLS (TODAY, THIS WEEK, ETC.)
+# 6. SIDEBAR: SAFE DATE RANGE & PRESET FILTERS
 # ----------------------------------------------------------------------
 st.sidebar.markdown("### 🔍 Signal Filters")
 
@@ -384,7 +384,11 @@ for d_str in df_raw["Date"].dropna().unique():
 latest_sheet_date = max(available_dates) if available_dates else date.today()
 min_sheet_date = min(available_dates) if available_dates else date(2020, 1, 1)
 
-# Period Presets
+# Ensure upper calendar limit safely accommodates current date and selections
+today_ref = date.today()
+calendar_max_limit = max(latest_sheet_date, today_ref) + timedelta(days=30)
+calendar_min_limit = min(min_sheet_date, date(2020, 1, 1))
+
 preset_options = [
     "Latest Session",
     "Today",
@@ -399,9 +403,7 @@ default_mode_idx = preset_options.index(st.session_state.pref_date_mode) if st.s
 selected_date_mode = st.sidebar.selectbox("Date Period", options=preset_options, index=default_mode_idx)
 st.session_state.pref_date_mode = selected_date_mode
 
-today_ref = date.today()
-
-# Compute start and end dates based on preset selection
+# Calculate start and end date based on selected mode
 if selected_date_mode == "Latest Session":
     filter_start = latest_sheet_date
     filter_end = latest_sheet_date
@@ -409,11 +411,9 @@ elif selected_date_mode == "Today":
     filter_start = today_ref
     filter_end = today_ref
 elif selected_date_mode == "This Week":
-    # Monday to Friday of current week
     filter_start = today_ref - timedelta(days=today_ref.weekday())
     filter_end = filter_start + timedelta(days=4)
 elif selected_date_mode == "Last Week":
-    # Monday to Friday of preceding week
     filter_start = today_ref - timedelta(days=today_ref.weekday() + 7)
     filter_end = filter_start + timedelta(days=4)
 elif selected_date_mode == "Last 30 Days":
@@ -423,42 +423,61 @@ elif selected_date_mode == "All Available Dates":
     filter_start = min_sheet_date
     filter_end = latest_sheet_date
 else:  # Custom Range
-    # Restore previous custom range if saved
     init_custom_start = min_sheet_date
     init_custom_end = latest_sheet_date
-    if st.session_state.pref_start_date and st.session_state.pref_end_date:
+
+    # Validate and clamp stored custom dates to prevent StreamlitValueAboveMaxError
+    if st.session_state.pref_start_date:
         try:
-            init_custom_start = datetime.strptime(st.session_state.pref_start_date, "%Y-%m-%d").date()
-            init_custom_end = datetime.strptime(st.session_state.pref_end_date, "%Y-%m-%d").date()
+            cand_s = datetime.strptime(st.session_state.pref_start_date, "%Y-%m-%d").date()
+            if calendar_min_limit <= cand_s <= calendar_max_limit:
+                init_custom_start = cand_s
         except ValueError:
             pass
+
+    if st.session_state.pref_end_date:
+        try:
+            cand_e = datetime.strptime(st.session_state.pref_end_date, "%Y-%m-%d").date()
+            if calendar_min_limit <= cand_e <= calendar_max_limit:
+                init_custom_end = cand_e
+        except ValueError:
+            pass
+
+    # Ensure start date is not after end date
+    if init_custom_start > init_custom_end:
+        init_custom_start, init_custom_end = init_custom_end, init_custom_start
 
     date_range_pick = st.sidebar.date_input(
         "Select Range (Start & End)",
         value=(init_custom_start, init_custom_end),
-        min_value=min_sheet_date,
-        max_value=latest_sheet_date + timedelta(days=1),
+        min_value=calendar_min_limit,
+        max_value=calendar_max_limit,
         format="YYYY-MM-DD"
     )
 
-    if isinstance(date_range_pick, tuple) and len(date_range_pick) == 2:
-        filter_start, filter_end = date_range_pick
-    elif isinstance(date_range_pick, tuple) and len(date_range_pick) == 1:
-        filter_start = date_range_pick[0]
-        filter_end = date_range_pick[0]
+    if isinstance(date_range_pick, (tuple, list)):
+        if len(date_range_pick) == 2:
+            filter_start, filter_end = date_range_pick
+        elif len(date_range_pick) == 1:
+            filter_start = date_range_pick[0]
+            filter_end = date_range_pick[0]
+        else:
+            filter_start = min_sheet_date
+            filter_end = latest_sheet_date
     else:
         filter_start = date_range_pick
         filter_end = date_range_pick
 
-# Filter the DataFrame based on the active date range
+# Convert active filter boundaries to strings
 start_str = filter_start.strftime("%Y-%m-%d")
 end_str = filter_end.strftime("%Y-%m-%d")
 st.session_state.pref_start_date = start_str
 st.session_state.pref_end_date = end_str
 
+# Filter data
 df_day = df_raw[(df_raw["Date"] >= start_str) & (df_raw["Date"] <= end_str)].copy()
 
-# Date display caption in sidebar
+# Date display caption
 if start_str == end_str:
     st.sidebar.caption(f"📅 Active Date: `{start_str}`")
 else:
@@ -522,7 +541,6 @@ min_dist_52wh = st.sidebar.slider(
 st.session_state.pref_dist = min_dist_52wh
 df_day = df_day[df_day["Dist_52WH"] >= min_dist_52wh]
 
-# Synchronize URL Query Parameters
 st.query_params["dmode"] = selected_date_mode
 st.query_params["start"] = start_str
 st.query_params["end"] = end_str
