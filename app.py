@@ -13,7 +13,7 @@ st.set_page_config(
 )
 
 # ----------------------------------------------------------------------
-# 1. CLEAN UI & SAFE TOP-PADDING STYLING (NO HEADER CLIPPING)
+# 1. CLEAN UI, PROMINENT HOVER/SELECTION & SAFE TOP-PADDING STYLING
 # ----------------------------------------------------------------------
 st.markdown("""
 <style>
@@ -66,6 +66,16 @@ st.markdown("""
         font-size: 0.76rem !important;
         font-weight: 700 !important;
         padding: 2px 4px !important;
+    }
+
+    /* Darker row hover indicator */
+    div[data-testid="stDataFrame"] canvas {
+        cursor: pointer;
+    }
+    div[data-testid="stDataFrame"] {
+        --gdg-accent-color: #3B82F6 !important;
+        --gdg-bg-cell-selected: #E0E7FF !important;
+        --gdg-bg-cell-hovered: #F1F5F9 !important;
     }
 
     /* Overview Cards */
@@ -190,6 +200,23 @@ def format_indian_currency(val, decimals=2, prefix=""):
 
     sign = "-" if is_negative else ""
     return f"{sign}{prefix}{res}{dec_part}"
+
+def categorize_market_cap(mcap_val):
+    """Categorizes market cap into 3 clearly marked tiers with formatted values."""
+    if pd.isna(mcap_val) or mcap_val == "" or mcap_val is None:
+        return "-"
+    try:
+        val = float(mcap_val)
+    except (ValueError, TypeError):
+        return str(mcap_val)
+
+    formatted_num = format_indian_currency(val, 0)
+    if val >= 80000:
+        return f"💎 Large: ₹{formatted_num}Cr"
+    elif val >= 20000:
+        return f"🔷 Mid: ₹{formatted_num}Cr"
+    else:
+        return f"🔸 Small: ₹{formatted_num}Cr"
 
 def clean_date_str(val):
     if pd.isna(val) or str(val).strip() in ["", "-", "N/A", "None"]:
@@ -373,7 +400,6 @@ if df_raw.empty:
     st.warning("No data found in Google Sheet. Run your scan script first.")
     st.stop()
 
-# Parse sheet dates into datetime objects
 available_dates = []
 for d_str in df_raw["Date"].dropna().unique():
     try:
@@ -384,7 +410,6 @@ for d_str in df_raw["Date"].dropna().unique():
 latest_sheet_date = max(available_dates) if available_dates else date.today()
 min_sheet_date = min(available_dates) if available_dates else date(2020, 1, 1)
 
-# Ensure upper calendar limit safely accommodates current date and selections
 today_ref = date.today()
 calendar_max_limit = max(latest_sheet_date, today_ref) + timedelta(days=30)
 calendar_min_limit = min(min_sheet_date, date(2020, 1, 1))
@@ -403,7 +428,6 @@ default_mode_idx = preset_options.index(st.session_state.pref_date_mode) if st.s
 selected_date_mode = st.sidebar.selectbox("Date Period", options=preset_options, index=default_mode_idx)
 st.session_state.pref_date_mode = selected_date_mode
 
-# Calculate start and end date based on selected mode
 if selected_date_mode == "Latest Session":
     filter_start = latest_sheet_date
     filter_end = latest_sheet_date
@@ -426,7 +450,6 @@ else:  # Custom Range
     init_custom_start = min_sheet_date
     init_custom_end = latest_sheet_date
 
-    # Validate and clamp stored custom dates to prevent StreamlitValueAboveMaxError
     if st.session_state.pref_start_date:
         try:
             cand_s = datetime.strptime(st.session_state.pref_start_date, "%Y-%m-%d").date()
@@ -443,7 +466,6 @@ else:  # Custom Range
         except ValueError:
             pass
 
-    # Ensure start date is not after end date
     if init_custom_start > init_custom_end:
         init_custom_start, init_custom_end = init_custom_end, init_custom_start
 
@@ -468,16 +490,13 @@ else:  # Custom Range
         filter_start = date_range_pick
         filter_end = date_range_pick
 
-# Convert active filter boundaries to strings
 start_str = filter_start.strftime("%Y-%m-%d")
 end_str = filter_end.strftime("%Y-%m-%d")
 st.session_state.pref_start_date = start_str
 st.session_state.pref_end_date = end_str
 
-# Filter data
 df_day = df_raw[(df_raw["Date"] >= start_str) & (df_raw["Date"] <= end_str)].copy()
 
-# Date display caption
 if start_str == end_str:
     st.sidebar.caption(f"📅 Active Date: `{start_str}`")
 else:
@@ -577,6 +596,9 @@ with tab_signals:
     if df_day.empty:
         st.info(f"No signals found for the period ({start_str} to {end_str}).")
     else:
+        max_turnover = float(df_day["Turnover_Cr"].max()) if not df_day.empty else 1000.0
+        max_turnover = max(max_turnover, 100.0)
+
         table_df = pd.DataFrame()
         table_df["Date"] = df_day["Date"].astype(str)
         table_df["Symbol"] = df_day["Symbol"].astype(str)
@@ -593,8 +615,13 @@ with tab_signals:
         table_df["Dist%"] = df_day["Dist_52WH"].apply(lambda v: f"{v:.1f}%")
         table_df["R²"] = df_day["R2"].apply(lambda v: f"{v:.2f}")
         table_df["RSI"] = df_day["RSI"].apply(lambda v: f"{v:.0f}")
-        table_df["Turnover"] = df_day["Turnover_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 1)}Cr")
-        table_df["MCap"] = df_day["Market_Cap_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 0)}Cr")
+        
+        # Numeric Turnover used for single-color heat map column
+        table_df["Turnover (₹Cr)"] = df_day["Turnover_Cr"].round(1)
+        
+        # 3-Category Market Cap formatting
+        table_df["MCap"] = df_day["Market_Cap_Cr"].apply(categorize_market_cap)
+
         table_df["Vol"] = df_day["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
         table_df["1W Vol"] = df_day["Avg_1W_Volume"].apply(lambda v: format_indian_currency(v, 0))
         table_df["Chart"] = df_day["TradingView_URL"]
@@ -619,8 +646,20 @@ with tab_signals:
                 "Dist%": st.column_config.TextColumn("Dist%", width=65, alignment="center"),
                 "R²": st.column_config.TextColumn("R²", width=50, alignment="center"),
                 "RSI": st.column_config.TextColumn("RSI", width=50, alignment="center"),
-                "Turnover": st.column_config.TextColumn("Turnover", width=75, alignment="center"),
-                "MCap": st.column_config.TextColumn("MCap", width=80, alignment="center"),
+                "Turnover (₹Cr)": st.column_config.ProgressColumn(
+                    "Turnover (₹Cr)",
+                    help="Institutional Turnover heatmap within the day's signals",
+                    format="₹%.1f Cr",
+                    min_value=0.0,
+                    max_value=max_turnover,
+                    width=110
+                ),
+                "MCap": st.column_config.TextColumn(
+                    "MCap (Large/Mid/Small)", 
+                    help="💎 Large > 80k Cr | 🔷 Mid 20k-80k Cr | 🔸 Small < 20k Cr", 
+                    width=135, 
+                    alignment="center"
+                ),
                 "Vol": st.column_config.TextColumn("Vol", width=80, alignment="center"),
                 "1W Vol": st.column_config.TextColumn("1W Vol", width=80, alignment="center"),
                 "Chart": st.column_config.LinkColumn("Chart", width=65, display_text="Open ↗", alignment="center"),
@@ -701,7 +740,7 @@ with tab_overview:
                             <div><span class="card-label">52WH:</span> <span class="card-val">{format_indian_currency(row['High_52W'], 1, '₹')}</span></div>
                             <div><span class="card-label">Dist:</span> <span class="card-val">{row['Dist_52WH']:.1f}%</span></div>
                             <div><span class="card-label">Vol:</span> <span class="card-val">{format_indian_currency(row['Today_Volume'], 0)}</span></div>
-                            <div><span class="card-label">MCap:</span> <span class="card-val">{format_indian_currency(row['Market_Cap_Cr'], 0, '₹')}Cr</span></div>
+                            <div><span class="card-label">MCap:</span> <span class="card-val">{categorize_market_cap(row['Market_Cap_Cr'])}</span></div>
                         </div>
                         """, unsafe_allow_html=True)
 
@@ -732,7 +771,7 @@ with tab_watchlist:
         watch_display["52W Date"] = bookmarked_df["High_52W_Date"].astype(str)
         watch_display["Dist%"] = bookmarked_df["Dist_52WH"].apply(lambda v: f"{v:.2f}%")
         watch_display["Vol"] = bookmarked_df["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
-        watch_display["MCap"] = bookmarked_df["Market_Cap_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 0)}Cr")
+        watch_display["MCap"] = bookmarked_df["Market_Cap_Cr"].apply(categorize_market_cap)
         watch_display["Chart"] = bookmarked_df["TradingView_URL"]
 
         st.dataframe(
@@ -748,7 +787,7 @@ with tab_watchlist:
                 "52W Date": st.column_config.TextColumn("52W Date", width=85, alignment="center"),
                 "Dist%": st.column_config.TextColumn("Dist%", width=65, alignment="center"),
                 "Vol": st.column_config.TextColumn("Vol", width=80, alignment="center"),
-                "MCap": st.column_config.TextColumn("MCap", width=80, alignment="center"),
+                "MCap": st.column_config.TextColumn("MCap Tier", width=135, alignment="center"),
                 "Chart": st.column_config.LinkColumn("Chart", width=65, display_text="Open ↗", alignment="center")
             },
             hide_index=True,
