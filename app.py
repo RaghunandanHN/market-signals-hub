@@ -13,7 +13,7 @@ st.set_page_config(
 )
 
 # ----------------------------------------------------------------------
-# 1. CLEAN UI & COMPACT VIEWPORT STYLING
+# 1. CLEAN UI, COMPACT VIEWPORT & CLOUD CHROME SUPPRESSION CSS
 # ----------------------------------------------------------------------
 st.markdown("""
 <style>
@@ -22,6 +22,18 @@ st.markdown("""
         background: transparent !important;
         height: 2.2rem !important;
         z-index: 1 !important;
+    }
+
+    /* Hide Streamlit Community Cloud Manage App floating button and viewer badges */
+    [data-testid="manage-app-button"],
+    div[class*="viewerBadge"],
+    div[class*="manageApp"],
+    .stAppDeployButton,
+    button[title="Manage app"] {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
     }
 
     /* Safe container padding */
@@ -593,7 +605,6 @@ with tab_signals:
         table_df["R²"] = df_day["R2"].apply(lambda v: f"{v:.2f}")
         table_df["RSI"] = df_day["RSI"].apply(lambda v: f"{v:.0f}")
 
-        # Clean formatted numeric text
         table_df["Turnover"] = df_day["Turnover_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 1)}Cr")
         table_df["MCap"] = df_day["Market_Cap_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 0)}Cr")
         table_df["Vol"] = df_day["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
@@ -603,7 +614,7 @@ with tab_signals:
         table_df["📝"] = df_day["Symbol"].apply(lambda s: "📝" if s in st.session_state.signal_notes else "-")
         table_df["⭐"] = df_day["Symbol"].apply(lambda s: s in st.session_state.watchlist_symbols)
 
-        # Max values for single-color heat map calculations
+        # Mathematical normalization limits for heat maps
         max_turnover = float(df_day["Turnover_Cr"].max()) if not df_day.empty else 1.0
         max_turnover = max(max_turnover, 1.0)
 
@@ -617,7 +628,7 @@ with tab_signals:
             styles_df = pd.DataFrame("", index=df_in.index, columns=df_in.columns)
             
             for idx in df_in.index:
-                # 1. Turnover Single-Color Heatmap (Slate/Sky blue)
+                # 1. Turnover Single-Color Heatmap
                 t_val = df_day.loc[idx, "Turnover_Cr"]
                 r_turnover = min(max(t_val / max_turnover, 0.0), 1.0)
                 r1 = int(248 - r_turnover * (248 - 186))
@@ -625,7 +636,7 @@ with tab_signals:
                 b1 = int(252 - r_turnover * (252 - 253))
                 styles_df.loc[idx, "Turnover"] = f"background-color: rgb({r1}, {g1}, {b1}); font-weight: 500;"
 
-                # 2. Today Volume Single-Color Heatmap (Soft blue tint)
+                # 2. Today Volume Single-Color Heatmap
                 v_val = df_day.loc[idx, "Today_Volume"]
                 r_vol = min(max(v_val / max_vol, 0.0), 1.0)
                 r2 = int(248 - r_vol * (248 - 191))
@@ -633,7 +644,7 @@ with tab_signals:
                 b2 = int(252 - r_vol * (252 - 254))
                 styles_df.loc[idx, "Vol"] = f"background-color: rgb({r2}, {g2}, {b2}); font-weight: 500;"
 
-                # 3. 1W Avg Volume Single-Color Heatmap (Soft blue tint)
+                # 3. 1W Avg Volume Single-Color Heatmap
                 w_val = df_day.loc[idx, "Avg_1W_Volume"]
                 r_wvol = min(max(w_val / max_1w_vol, 0.0), 1.0)
                 r3 = int(248 - r_wvol * (248 - 191))
@@ -641,16 +652,13 @@ with tab_signals:
                 b3 = int(252 - r_wvol * (252 - 254))
                 styles_df.loc[idx, "1W Vol"] = f"background-color: rgb({r3}, {g3}, {b3}); font-weight: 500;"
 
-                # 4. Market Cap: Subtle non-intrusive palette (no yellow or orange)
+                # 4. Market Cap: Non-intrusive palette
                 m_val = df_day.loc[idx, "Market_Cap_Cr"]
                 if m_val >= 80000:
-                    # Large Cap: Soft Slate Blue
                     styles_df.loc[idx, "MCap"] = "background-color: #E0E7FF; color: #1E40AF; font-weight: 600;"
                 elif m_val >= 20000:
-                    # Mid Cap: Subtle Neutral Gray
                     styles_df.loc[idx, "MCap"] = "background-color: #F1F5F9; color: #334155; font-weight: 600;"
                 else:
-                    # Small Cap: Soft Muted Sage/Teal
                     styles_df.loc[idx, "MCap"] = "background-color: #E6F4EA; color: #166534; font-weight: 600;"
 
             return styles_df
