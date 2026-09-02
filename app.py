@@ -576,7 +576,6 @@ with tab_signals:
     if df_day.empty:
         st.info(f"No signals found for the period ({start_str} to {end_str}).")
     else:
-        # Build Clean DataFrame for Data Editor without external matplotlib stylers
         table_df = pd.DataFrame(index=df_day.index)
         table_df["Date"] = df_day["Date"].astype(str)
         table_df["Symbol"] = df_day["Symbol"].astype(str)
@@ -594,10 +593,9 @@ with tab_signals:
         table_df["R²"] = df_day["R2"].apply(lambda v: f"{v:.2f}")
         table_df["RSI"] = df_day["RSI"].apply(lambda v: f"{v:.0f}")
 
-        # Formatted cleanly without extra icon widgets or progress bars
+        # Clean formatted numeric text
         table_df["Turnover"] = df_day["Turnover_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 1)}Cr")
         table_df["MCap"] = df_day["Market_Cap_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 0)}Cr")
-
         table_df["Vol"] = df_day["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
         table_df["1W Vol"] = df_day["Avg_1W_Volume"].apply(lambda v: format_indian_currency(v, 0))
         table_df["Chart"] = df_day["TradingView_URL"]
@@ -605,32 +603,55 @@ with tab_signals:
         table_df["📝"] = df_day["Symbol"].apply(lambda s: "📝" if s in st.session_state.signal_notes else "-")
         table_df["⭐"] = df_day["Symbol"].apply(lambda s: s in st.session_state.watchlist_symbols)
 
-        # Pure Python Styler function for cell background colors
+        # Max values for single-color heat map calculations
         max_turnover = float(df_day["Turnover_Cr"].max()) if not df_day.empty else 1.0
         max_turnover = max(max_turnover, 1.0)
 
+        max_vol = float(df_day["Today_Volume"].max()) if not df_day.empty else 1.0
+        max_vol = max(max_vol, 1.0)
+
+        max_1w_vol = float(df_day["Avg_1W_Volume"].max()) if not df_day.empty else 1.0
+        max_1w_vol = max(max_1w_vol, 1.0)
+
         def apply_pure_table_styles(df_in):
-            # Empty matrix of CSS styles matching table_df dimensions
             styles_df = pd.DataFrame("", index=df_in.index, columns=df_in.columns)
             
-            # Pure math hex generator for Turnover gradient (soft ice blue to deeper blue)
             for idx in df_in.index:
+                # 1. Turnover Single-Color Heatmap (Slate/Sky blue)
                 t_val = df_day.loc[idx, "Turnover_Cr"]
-                ratio = min(max(t_val / max_turnover, 0.0), 1.0)
-                # Interpolate between #F8FAFC (white/slate) and #BAE6FD (soft sky blue)
-                r = int(248 - ratio * (248 - 186))
-                g = int(250 - ratio * (250 - 230))
-                b = int(252 - ratio * (252 - 253))
-                styles_df.loc[idx, "Turnover"] = f"background-color: rgb({r}, {g}, {b}); font-weight: 500;"
+                r_turnover = min(max(t_val / max_turnover, 0.0), 1.0)
+                r1 = int(248 - r_turnover * (248 - 186))
+                g1 = int(250 - r_turnover * (250 - 230))
+                b1 = int(252 - r_turnover * (252 - 253))
+                styles_df.loc[idx, "Turnover"] = f"background-color: rgb({r1}, {g1}, {b1}); font-weight: 500;"
 
-                # Pure background fill for 3-tier Market Cap
+                # 2. Today Volume Single-Color Heatmap (Soft blue tint)
+                v_val = df_day.loc[idx, "Today_Volume"]
+                r_vol = min(max(v_val / max_vol, 0.0), 1.0)
+                r2 = int(248 - r_vol * (248 - 191))
+                g2 = int(250 - r_vol * (250 - 219))
+                b2 = int(252 - r_vol * (252 - 254))
+                styles_df.loc[idx, "Vol"] = f"background-color: rgb({r2}, {g2}, {b2}); font-weight: 500;"
+
+                # 3. 1W Avg Volume Single-Color Heatmap (Soft blue tint)
+                w_val = df_day.loc[idx, "Avg_1W_Volume"]
+                r_wvol = min(max(w_val / max_1w_vol, 0.0), 1.0)
+                r3 = int(248 - r_wvol * (248 - 191))
+                g3 = int(250 - r_wvol * (250 - 219))
+                b3 = int(252 - r_wvol * (252 - 254))
+                styles_df.loc[idx, "1W Vol"] = f"background-color: rgb({r3}, {g3}, {b3}); font-weight: 500;"
+
+                # 4. Market Cap: Subtle non-intrusive palette (no yellow or orange)
                 m_val = df_day.loc[idx, "Market_Cap_Cr"]
                 if m_val >= 80000:
-                    styles_df.loc[idx, "MCap"] = "background-color: #DCEAFE; color: #1E3A8A; font-weight: 600;"
+                    # Large Cap: Soft Slate Blue
+                    styles_df.loc[idx, "MCap"] = "background-color: #E0E7FF; color: #1E40AF; font-weight: 600;"
                 elif m_val >= 20000:
-                    styles_df.loc[idx, "MCap"] = "background-color: #EDE9FE; color: #5B21B6; font-weight: 600;"
+                    # Mid Cap: Subtle Neutral Gray
+                    styles_df.loc[idx, "MCap"] = "background-color: #F1F5F9; color: #334155; font-weight: 600;"
                 else:
-                    styles_df.loc[idx, "MCap"] = "background-color: #FEF3C7; color: #92400E; font-weight: 600;"
+                    # Small Cap: Soft Muted Sage/Teal
+                    styles_df.loc[idx, "MCap"] = "background-color: #E6F4EA; color: #166534; font-weight: 600;"
 
             return styles_df
 
