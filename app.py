@@ -1,6 +1,6 @@
 import os
 import re
-from datetime import datetime
+from datetime import datetime, date
 import gspread
 import pandas as pd
 import streamlit as st
@@ -12,10 +12,10 @@ st.set_page_config(
 )
 
 # ----------------------------------------------------------------------
-# 1. FORMATTING HELPERS (Indian Numbering & Date Converter)
+# 1. FORMATTING HELPERS (Indian Numbering & Date Parser)
 # ----------------------------------------------------------------------
 def format_indian_currency(val, decimals=2, prefix=""):
-    """Formats numbers to Indian comma separation (e.g., 12,087.00 or 1,075,937)."""
+    """Formats numbers to Indian comma grouping (e.g. 12,087.00 or 1,075,937)."""
     if pd.isna(val) or val == "" or val is None:
         return "-"
     try:
@@ -52,13 +52,12 @@ def format_indian_currency(val, decimals=2, prefix=""):
     return f"{sign}{prefix}{res}{dec_part}"
 
 def clean_date_str(val):
-    """Converts Google Sheets serial date numbers (e.g. 46267) or strings to YYYY-MM-DD."""
+    """Parses Google Sheets serial day counts or date strings into clean YYYY-MM-DD."""
     if pd.isna(val) or str(val).strip() == "":
         return datetime.now().strftime("%Y-%m-%d")
     val_str = str(val).strip()
     if val_str.isdigit():
         try:
-            # Excel/Sheets serial epoch base
             base_date = datetime(1899, 12, 30)
             return (base_date + pd.Timedelta(days=int(val_str))).strftime("%Y-%m-%d")
         except Exception:
@@ -66,14 +65,14 @@ def clean_date_str(val):
     return val_str
 
 def extract_tv_url(formula_str):
-    """Extracts raw URL from '=HYPERLINK("url", "text")' formula."""
+    """Extracts raw link from '=HYPERLINK("url", "text")' formula."""
     if not isinstance(formula_str, str):
         return ""
     match = re.search(r'HYPERLINK\("([^"]+)"', formula_str, re.IGNORECASE)
     return match.group(1) if match else (formula_str if formula_str.startswith("http") else "")
 
 # ----------------------------------------------------------------------
-# 2. DATA INGESTION ENGINE
+# 2. DATA INGESTION (Streamlit Cloud Secrets)
 # ----------------------------------------------------------------------
 @st.cache_data(ttl=15)
 def load_sheet_data():
@@ -123,11 +122,17 @@ def load_sheet_data():
         else:
             df["TradingView_URL"] = ""
 
-        numeric_cols = ["LTP", "Stop_Loss", "Risk_Pct", "High_52W", "Dist_52WH", "R2", "RSI", "Turnover_Cr", "Market_Cap_Cr", "Today_Volume", "Avg_1W_Volume", "Alert_Count"]
+        numeric_cols = [
+            "LTP", "Stop_Loss", "Risk_Pct", "High_52W", "Dist_52WH", 
+            "R2", "RSI", "Turnover_Cr", "Market_Cap_Cr", "Today_Volume", 
+            "Avg_1W_Volume", "Alert_Count"
+        ]
         for c in numeric_cols:
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
 
+        if "Alert_Count" not in df.columns:
+            df["Alert_Count"] = 1
         if "Last_Seen" not in df.columns:
             df["Last_Seen"] = "-"
 
@@ -139,29 +144,56 @@ def load_sheet_data():
 df_raw = load_sheet_data()
 
 # ----------------------------------------------------------------------
-# 3. SIDEBAR CONTROLS & HEADER
+# 3. SIDEBAR: INTERACTIVE CALENDAR & FILTERS
 # ----------------------------------------------------------------------
 st.title("📊 Market Signals Hub")
 
 if df_raw.empty:
-    st.warning("No data retrieved from sheet. Check scanner connection or wait for first run.")
+    st.warning("No data found in Google Sheet. Run your scan script first.")
     st.stop()
 
 st.sidebar.header("🔍 Signal Filters")
-dates = sorted(df_raw["Date"].dropna().unique(), reverse=True)
-selected_date = st.sidebar.selectbox("Session Date", options=dates, index=0)
 
-df_day = df_raw[df_raw["Date"] == selected_date].copy()
+# Convert unique sheet date strings to date objects
+available_dates = []
+for d_str in df_raw["Date"].dropna().unique():
+    try:
+        available_dates.append(datetime.strptime(str(d_str), "%Y-%m-%d").date())
+    except ValueError:
+        pass
 
-strat_options = ["All"] + list(df_day["Strategy"].dropna().unique())
+if available_dates:
+    default_date = max(available_dates)
+    min_date = min(available_dates)
+    max_date = max(available_dates)
+else:
+    default_date = date.today()
+    min_date = date(2020, 1, 1)
+    max_date = date.today()
+
+# Standard popup calendar selector
+picked_date = st.sidebar.date_input(
+    "Session Date",
+    value=default_date,
+    min_value=min_date,
+    max_value=max_date,
+    format="YYYY-MM-DD"
+)
+
+selected_date_str = picked_date.strftime("%Y-%m-%d")
+df_day = df_raw[df_raw["Date"] == selected_date_str].copy()
+
+# Strategy dropdown filter
+strat_options = ["All"] + sorted([str(s) for s in df_day["Strategy"].dropna().unique()])
 selected_strat = st.sidebar.selectbox("Strategy", options=strat_options)
 if selected_strat != "All":
     df_day = df_day[df_day["Strategy"] == selected_strat]
 
+# Risk slider filter
 max_risk = st.sidebar.slider("Max Risk (%)", min_value=0.5, max_value=6.0, value=5.5, step=0.1)
 df_day = df_day[df_day["Risk_Pct"] <= max_risk]
 
-# Summary KPI Blocks
+# Top KPI Summary Cards
 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
 active_setups = df_day[df_day["Action"].str.contains("Ready", case=False, na=False)]
 kpi1.metric("Active Ready Setups", len(active_setups))
@@ -174,11 +206,11 @@ kpi4.metric("Liquidity Sweeps", len(df_day[df_day["Strategy"] == "Liquidity Swee
 # ----------------------------------------------------------------------
 tab_overview, tab_signals, tab_watchlist = st.tabs(["Overview", "Signals", "Watchlist"])
 
-# --- TAB 1: OVERVIEW (CARD FEED) ---
+# --- TAB 1: OVERVIEW (CARD GRID) ---
 with tab_overview:
     st.subheader(f"Active Ready Setups ({len(active_setups)})")
     if active_setups.empty:
-        st.info("No active setups meet this filter.")
+        st.info(f"No active setups found for {selected_date_str}.")
     else:
         cols_per_row = 3
         chunks = [active_setups.iloc[i:i + cols_per_row] for i in range(0, len(active_setups), cols_per_row)]
@@ -202,65 +234,68 @@ with tab_overview:
                         if row["TradingView_URL"]:
                             st.link_button("TradingView ↗", row["TradingView_URL"], use_container_width=True)
 
-# --- TAB 2: SIGNALS TABLE ---
+# --- TAB 2: SIGNALS (FULL DATA TABLE) ---
 with tab_signals:
-    st.subheader(f"All Signals ({len(df_day)})")
+    st.subheader(f"All Signals for {selected_date_str} ({len(df_day)})")
 
-    display_df = pd.DataFrame()
-    display_df["Date"] = df_day["Date"].astype(str)
-    display_df["Symbol"] = df_day["Symbol"].astype(str)
-    display_df["Strategy"] = df_day["Strategy"].astype(str)
-    display_df["Action"] = df_day["Action"].astype(str)
-    display_df["Alert_Count"] = df_day["Alert_Count"].astype(int)
-    display_df["Last_Seen"] = df_day["Last_Seen"].astype(str)
-    
-    # Formatted Indian numbers (xx,xx,xxx)
-    display_df["LTP"] = df_day["LTP"].apply(lambda v: format_indian_currency(v, 2, "₹"))
-    display_df["Stop_Loss"] = df_day["Stop_Loss"].apply(lambda v: format_indian_currency(v, 2, "₹"))
-    display_df["Risk_Pct"] = df_day["Risk_Pct"].apply(lambda v: f"{v:.2f}%")
-    display_df["High_52W"] = df_day["High_52W"].apply(lambda v: format_indian_currency(v, 2, "₹"))
-    display_df["Dist_52WH"] = df_day["Dist_52WH"].apply(lambda v: f"{v:.2f}%")
-    display_df["R2"] = df_day["R2"].apply(lambda v: f"{v:.2f}")
-    display_df["RSI"] = df_day["RSI"].apply(lambda v: f"{v:.1f}")
-    display_df["Turnover_Cr"] = df_day["Turnover_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 1)} Cr")
-    display_df["Market_Cap_Cr"] = df_day["Market_Cap_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 0)} Cr")
-    display_df["Today_Volume"] = df_day["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
-    display_df["Avg_1W_Volume"] = df_day["Avg_1W_Volume"].apply(lambda v: format_indian_currency(v, 0))
-    display_df["TradingView_URL"] = df_day["TradingView_URL"]
+    if df_day.empty:
+        st.info(f"No signals recorded for {selected_date_str}.")
+    else:
+        display_df = pd.DataFrame()
+        display_df["Date"] = df_day["Date"].astype(str)
+        display_df["Symbol"] = df_day["Symbol"].astype(str)
+        display_df["Strategy"] = df_day["Strategy"].astype(str)
+        display_df["Action"] = df_day["Action"].astype(str)
+        display_df["Alert_Count"] = df_day["Alert_Count"].astype(int)
+        display_df["Last_Seen"] = df_day["Last_Seen"].astype(str)
 
-    st.dataframe(
-        display_df,
-        column_config={
-            "Date": st.column_config.TextColumn("Date", alignment="center"),
-            "Symbol": st.column_config.TextColumn("Symbol", alignment="center"),
-            "Strategy": st.column_config.TextColumn("Strategy", alignment="center"),
-            "Action": st.column_config.TextColumn("Action", alignment="center"),
-            "Alert_Count": st.column_config.NumberColumn("Alert Count", alignment="center"),
-            "Last_Seen": st.column_config.TextColumn("Last Seen", alignment="center"),
-            "LTP": st.column_config.TextColumn("LTP (₹)", alignment="center"),
-            "Stop_Loss": st.column_config.TextColumn("Stop Loss", alignment="center"),
-            "Risk_Pct": st.column_config.TextColumn("Risk (%)", alignment="center"),
-            "High_52W": st.column_config.TextColumn("52W High", alignment="center"),
-            "Dist_52WH": st.column_config.TextColumn("Dist 52WH", alignment="center"),
-            "R2": st.column_config.TextColumn("R²", alignment="center"),
-            "RSI": st.column_config.TextColumn("RSI", alignment="center"),
-            "Turnover_Cr": st.column_config.TextColumn("Turnover", alignment="center"),
-            "Market_Cap_Cr": st.column_config.TextColumn("MCap (₹Cr)", alignment="center"),
-            "Today_Volume": st.column_config.TextColumn("Today Vol", alignment="center"),
-            "Avg_1W_Volume": st.column_config.TextColumn("1W Avg Vol", alignment="center"),
-            "TradingView_URL": st.column_config.LinkColumn("Chart", display_text="Open ↗", alignment="center")
-        },
-        hide_index=True,
-        use_container_width=True,
-        height=650
-    )
+        # Formatted Indian numbers (xx,xx,xxx)
+        display_df["LTP"] = df_day["LTP"].apply(lambda v: format_indian_currency(v, 2, "₹"))
+        display_df["Stop_Loss"] = df_day["Stop_Loss"].apply(lambda v: format_indian_currency(v, 2, "₹"))
+        display_df["Risk_Pct"] = df_day["Risk_Pct"].apply(lambda v: f"{v:.2f}%")
+        display_df["High_52W"] = df_day["High_52W"].apply(lambda v: format_indian_currency(v, 2, "₹"))
+        display_df["Dist_52WH"] = df_day["Dist_52WH"].apply(lambda v: f"{v:.2f}%")
+        display_df["R2"] = df_day["R2"].apply(lambda v: f"{v:.2f}")
+        display_df["RSI"] = df_day["RSI"].apply(lambda v: f"{v:.1f}")
+        display_df["Turnover_Cr"] = df_day["Turnover_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 1)} Cr")
+        display_df["Market_Cap_Cr"] = df_day["Market_Cap_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 0)} Cr")
+        display_df["Today_Volume"] = df_day["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
+        display_df["Avg_1W_Volume"] = df_day["Avg_1W_Volume"].apply(lambda v: format_indian_currency(v, 0))
+        display_df["TradingView_URL"] = df_day["TradingView_URL"]
+
+        st.dataframe(
+            display_df,
+            column_config={
+                "Date": st.column_config.TextColumn("Date", alignment="center"),
+                "Symbol": st.column_config.TextColumn("Symbol", alignment="center"),
+                "Strategy": st.column_config.TextColumn("Strategy", alignment="center"),
+                "Action": st.column_config.TextColumn("Action", alignment="center"),
+                "Alert_Count": st.column_config.NumberColumn("Alert Count", alignment="center"),
+                "Last_Seen": st.column_config.TextColumn("Last Seen", alignment="center"),
+                "LTP": st.column_config.TextColumn("LTP (₹)", alignment="center"),
+                "Stop_Loss": st.column_config.TextColumn("Stop Loss", alignment="center"),
+                "Risk_Pct": st.column_config.TextColumn("Risk (%)", alignment="center"),
+                "High_52W": st.column_config.TextColumn("52W High", alignment="center"),
+                "Dist_52WH": st.column_config.TextColumn("Dist 52WH", alignment="center"),
+                "R2": st.column_config.TextColumn("R²", alignment="center"),
+                "RSI": st.column_config.TextColumn("RSI", alignment="center"),
+                "Turnover_Cr": st.column_config.TextColumn("Turnover", alignment="center"),
+                "Market_Cap_Cr": st.column_config.TextColumn("MCap (₹Cr)", alignment="center"),
+                "Today_Volume": st.column_config.TextColumn("Today Vol", alignment="center"),
+                "Avg_1W_Volume": st.column_config.TextColumn("1W Avg Vol", alignment="center"),
+                "TradingView_URL": st.column_config.LinkColumn("Chart", display_text="Open ↗", alignment="center")
+            },
+            hide_index=True,
+            use_container_width=True,
+            height=650
+        )
 
 # --- TAB 3: WATCHLIST ---
 with tab_watchlist:
     st.subheader("Priority Trigger Watchlist")
     watchlist_df = df_day[df_day["Action"].isin(["Retested & Ready", "Ready (ORB)", "Confirm Reclaim"])]
     if watchlist_df.empty:
-        st.info("Watchlist is currently empty for this session.")
+        st.info(f"Watchlist is empty for {selected_date_str}.")
     else:
         for _, row in watchlist_df.iterrows():
             with st.container(border=True):
