@@ -188,7 +188,6 @@ def format_indian_currency(val, decimals=2, prefix=""):
     return f"{sign}{prefix}{res}{dec_part}"
 
 def clean_date_str(val):
-    """Parses Google Sheets serial day numbers (e.g. 46262) or date strings to YYYY-MM-DD."""
     if pd.isna(val) or str(val).strip() in ["", "-", "N/A", "None"]:
         return "-"
     val_str = str(val).strip()
@@ -567,7 +566,7 @@ with tab_signals:
                 row_match = df_day[df_day["Symbol"] == chosen_sym].iloc[0]
                 open_note_modal(chosen_sym, row_match["Strategy"], format_indian_currency(row_match["LTP"], 2))
 
-# --- TAB 2: OVERVIEW CARDS ---
+# --- TAB 2: OVERVIEW CARDS (WITH GUARANTEED UNIQUE COMPONENT KEYS) ---
 with tab_overview:
     if active_setups.empty:
         st.info(f"No active setups found matching filters for {selected_date_str}.")
@@ -575,10 +574,15 @@ with tab_overview:
         cols_per_row = 4
         chunks = [active_setups.iloc[i:i + cols_per_row] for i in range(0, len(active_setups), cols_per_row)]
         
+        global_card_counter = 0
         for chunk in chunks:
             grid = st.columns(cols_per_row)
             for idx, (_, row) in enumerate(chunk.iterrows()):
+                global_card_counter += 1
                 sym = row['Symbol']
+                strat = row['Strategy']
+                strat_clean = re.sub(r'[^a-zA-Z0-9]', '', str(strat))
+                
                 is_starred = sym in st.session_state.watchlist_symbols
                 star_icon = "⭐" if is_starred else "☆"
                 has_note_tag = " 📝" if sym in st.session_state.signal_notes else ""
@@ -591,12 +595,14 @@ with tab_overview:
                         with top_left:
                             st.markdown(
                                 f"<a href=\"{tv_url}\" target=\"_blank\" class=\"card-symbol-link\">{sym} ↗</a> "
-                                f"<span style=\"font-size:0.75rem; color:#64748B;\">({row['Strategy']}){has_note_tag}</span><br>"
+                                f"<span style=\"font-size:0.75rem; color:#64748B;\">({strat}){has_note_tag}</span><br>"
                                 f"<span class=\"{badge_class}\">{row['Action']}</span>",
                                 unsafe_allow_html=True
                             )
                         with top_right:
-                            if st.button(star_icon, key=f"card_star_{sym}", help="Click to star/unstar"):
+                            # Unique key incorporates symbol, strategy, and position counter
+                            btn_key = f"card_star_{sym}_{strat_clean}_{global_card_counter}"
+                            if st.button(star_icon, key=btn_key, help="Click to star/unstar"):
                                 if is_starred:
                                     st.session_state.watchlist_symbols.discard(sym)
                                 else:
