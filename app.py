@@ -12,7 +12,7 @@ st.set_page_config(
 )
 
 # ----------------------------------------------------------------------
-# 1. FORMATTING HELPERS (Indian Numbering & Date Parser)
+# 1. FORMATTING HELPERS (Indian Numbering, Date & Time Parsers)
 # ----------------------------------------------------------------------
 def format_indian_currency(val, decimals=2, prefix=""):
     """Formats numbers to Indian comma grouping (e.g. 12,087.00 or 1,075,937)."""
@@ -62,6 +62,36 @@ def clean_date_str(val):
             return (base_date + pd.Timedelta(days=int(val_str))).strftime("%Y-%m-%d")
         except Exception:
             return val_str
+    return val_str
+
+def format_last_seen_time(val):
+    """Converts Sheets day fractions (0.57407...) or raw strings to HH:MM format."""
+    if pd.isna(val) or val == "" or val is None:
+        return "-"
+    
+    val_str = str(val).strip()
+    
+    # Try parsing numeric day fraction (e.g., 0.5740740740741)
+    try:
+        f_val = float(val_str)
+        if 0.0 <= f_val < 1.0:
+            total_seconds = int(round(f_val * 86400))
+            hours = (total_seconds // 3600) % 24
+            minutes = (total_seconds % 3600) // 60
+            return f"{hours:02d}:{minutes:02d}"
+    except ValueError:
+        pass
+
+    # Try parsing time strings like '13:46:40' or '13:46'
+    try:
+        parts = val_str.split(":")
+        if len(parts) >= 2:
+            h = int(parts[0])
+            m = int(parts[1])
+            return f"{h:02d}:{m:02d}"
+    except Exception:
+        pass
+
     return val_str
 
 def extract_tv_url(formula_str):
@@ -117,6 +147,11 @@ def load_sheet_data():
         else:
             df["Date"] = datetime.now().strftime("%Y-%m-%d")
 
+        if "Last_Seen" in df.columns:
+            df["Last_Seen"] = df["Last_Seen"].apply(format_last_seen_time)
+        else:
+            df["Last_Seen"] = "-"
+
         if "TradingView_URL" in df.columns:
             df["TradingView_URL"] = df["TradingView_URL"].apply(extract_tv_url)
         else:
@@ -133,8 +168,6 @@ def load_sheet_data():
 
         if "Alert_Count" not in df.columns:
             df["Alert_Count"] = 1
-        if "Last_Seen" not in df.columns:
-            df["Last_Seen"] = "-"
 
         return df
     except Exception as e:
@@ -144,7 +177,7 @@ def load_sheet_data():
 df_raw = load_sheet_data()
 
 # ----------------------------------------------------------------------
-# 3. SIDEBAR: INTERACTIVE CALENDAR & FILTERS
+# 3. SIDEBAR: INTERACTIVE CALENDAR & FLAT STRATEGY CHECKBOXES
 # ----------------------------------------------------------------------
 st.title("📊 Market Signals Hub")
 
@@ -154,7 +187,7 @@ if df_raw.empty:
 
 st.sidebar.header("🔍 Signal Filters")
 
-# Convert unique sheet date strings to date objects
+# Convert available date strings to date objects
 available_dates = []
 for d_str in df_raw["Date"].dropna().unique():
     try:
@@ -171,7 +204,7 @@ else:
     min_date = date(2020, 1, 1)
     max_date = date.today()
 
-# Standard popup calendar selector
+# Popup calendar widget
 picked_date = st.sidebar.date_input(
     "Session Date",
     value=default_date,
@@ -183,11 +216,16 @@ picked_date = st.sidebar.date_input(
 selected_date_str = picked_date.strftime("%Y-%m-%d")
 df_day = df_raw[df_raw["Date"] == selected_date_str].copy()
 
-# Strategy dropdown filter
-strat_options = ["All"] + sorted([str(s) for s in df_day["Strategy"].dropna().unique()])
-selected_strat = st.sidebar.selectbox("Strategy", options=strat_options)
-if selected_strat != "All":
-    df_day = df_day[df_day["Strategy"] == selected_strat]
+# Flat Strategy Checkbox Multi-Selection
+st.sidebar.write("**Strategy Filter**")
+all_strats = sorted([str(s) for s in df_raw["Strategy"].dropna().unique()])
+
+selected_strats = []
+for strat in all_strats:
+    if st.sidebar.checkbox(strat, value=True, key=f"chk_{strat}"):
+        selected_strats.append(strat)
+
+df_day = df_day[df_day["Strategy"].isin(selected_strats)]
 
 # Risk slider filter
 max_risk = st.sidebar.slider("Max Risk (%)", min_value=0.5, max_value=6.0, value=5.5, step=0.1)
@@ -210,7 +248,7 @@ tab_overview, tab_signals, tab_watchlist = st.tabs(["Overview", "Signals", "Watc
 with tab_overview:
     st.subheader(f"Active Ready Setups ({len(active_setups)})")
     if active_setups.empty:
-        st.info(f"No active setups found for {selected_date_str}.")
+        st.info(f"No active setups found matching filters for {selected_date_str}.")
     else:
         cols_per_row = 3
         chunks = [active_setups.iloc[i:i + cols_per_row] for i in range(0, len(active_setups), cols_per_row)]
@@ -234,12 +272,12 @@ with tab_overview:
                         if row["TradingView_URL"]:
                             st.link_button("TradingView ↗", row["TradingView_URL"], use_container_width=True)
 
-# --- TAB 2: SIGNALS (FULL DATA TABLE) ---
+# --- TAB 2: SIGNALS TABLE ---
 with tab_signals:
-    st.subheader(f"All Signals for {selected_date_str} ({len(df_day)})")
+    st.subheader(f"All Signals ({len(df_day)})")
 
     if df_day.empty:
-        st.info(f"No signals recorded for {selected_date_str}.")
+        st.info(f"No signals recorded matching the criteria for {selected_date_str}.")
     else:
         display_df = pd.DataFrame()
         display_df["Date"] = df_day["Date"].astype(str)
@@ -295,7 +333,7 @@ with tab_watchlist:
     st.subheader("Priority Trigger Watchlist")
     watchlist_df = df_day[df_day["Action"].isin(["Retested & Ready", "Ready (ORB)", "Confirm Reclaim"])]
     if watchlist_df.empty:
-        st.info(f"Watchlist is empty for {selected_date_str}.")
+        st.info(f"Watchlist is clear for {selected_date_str}.")
     else:
         for _, row in watchlist_df.iterrows():
             with st.container(border=True):
