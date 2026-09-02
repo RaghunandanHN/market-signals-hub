@@ -17,7 +17,6 @@ st.set_page_config(
 # ----------------------------------------------------------------------
 st.markdown("""
 <style>
-    /* Drastically reduce container padding */
     .block-container {
         padding-top: 1.8rem !important;
         padding-bottom: 0.5rem !important;
@@ -45,7 +44,6 @@ st.markdown("""
         line-height: 1.1 !important;
     }
     
-    /* Prevent table horizontal scroll by squeezing font and padding */
     div[data-testid="stDataFrame"] div[role="grid"] {
         font-size: 0.78rem !important;
     }
@@ -55,7 +53,6 @@ st.markdown("""
         padding: 2px 4px !important;
     }
 
-    /* Compact Cards */
     .card-symbol-link {
         font-size: 0.95rem;
         font-weight: 700;
@@ -112,7 +109,6 @@ if "watchlist_symbols" not in st.session_state:
 if "signal_notes" not in st.session_state:
     st.session_state.signal_notes = {}
 
-# Read initial settings from URL Query Params or default session state
 q_params = st.query_params
 
 if "pref_date" not in st.session_state:
@@ -137,7 +133,7 @@ if "pref_dist" not in st.session_state:
         st.session_state.pref_dist = -30.0
 
 # ----------------------------------------------------------------------
-# 3. FORMATTING HELPERS
+# 3. HELPER FUNCTIONS
 # ----------------------------------------------------------------------
 def format_indian_currency(val, decimals=2, prefix=""):
     if pd.isna(val) or val == "" or val is None:
@@ -241,7 +237,36 @@ def sanitize_tv_url(symbol, formula_str=""):
     return f"https://www.tradingview.com/chart/qQrGXVOL/?symbol=NSE:{clean_sym}&interval=D"
 
 # ----------------------------------------------------------------------
-# 4. DATA INGESTION ENGINE
+# 4. NOTE DIALOG POPUP
+# ----------------------------------------------------------------------
+@st.dialog("📝 Trade Note Editor")
+def open_note_modal(symbol, strategy, ltp):
+    current_entry = st.session_state.signal_notes.get(symbol, {})
+    current_note = current_entry.get("note", "")
+
+    st.markdown(f"**Stock:** `{symbol}` | **Strategy:** `{strategy}` | **LTP:** `₹{ltp}`")
+    new_note = st.text_area("Note / Plan:", value=current_note, height=120, placeholder="Observations, stop trail rules, or key levels...")
+
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        if st.button("💾 Save", use_container_width=True, type="primary"):
+            if new_note.strip():
+                st.session_state.signal_notes[symbol] = {
+                    "note": new_note.strip(),
+                    "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "strategy": strategy,
+                    "ltp": ltp
+                }
+            else:
+                st.session_state.signal_notes.pop(symbol, None)
+            st.rerun()
+    with c2:
+        if current_note and st.button("🗑️ Delete", use_container_width=True):
+            st.session_state.signal_notes.pop(symbol, None)
+            st.rerun()
+
+# ----------------------------------------------------------------------
+# 5. DATA INGESTION ENGINE
 # ----------------------------------------------------------------------
 @st.cache_data(ttl=15)
 def load_sheet_data():
@@ -320,7 +345,7 @@ def load_sheet_data():
 df_raw = load_sheet_data()
 
 # ----------------------------------------------------------------------
-# 5. SIDEBAR: PERSISTENT SETTINGS ACROSS SESSIONS
+# 6. SIDEBAR: PERSISTENT SETTINGS ACROSS SESSIONS
 # ----------------------------------------------------------------------
 st.sidebar.markdown("### 🔍 Signal Filters")
 
@@ -339,7 +364,6 @@ latest_date = max(available_dates) if available_dates else date.today()
 min_date = min(available_dates) if available_dates else date(2020, 1, 1)
 max_date = max(available_dates) if available_dates else date.today()
 
-# Restore saved date
 target_init_date = latest_date
 if st.session_state.pref_date:
     try:
@@ -371,7 +395,6 @@ st.session_state.pref_only_watchlist = only_watchlist
 if only_watchlist:
     df_day = df_day[df_day["Symbol"].isin(st.session_state.watchlist_symbols)]
 
-# Section 1: Strategy Selection
 st.sidebar.markdown("**Strategy Selection**")
 all_strats = sorted([str(s) for s in df_raw["Strategy"].dropna().unique()])
 
@@ -384,7 +407,6 @@ for strat in all_strats:
 st.session_state.pref_strats = selected_strats
 df_day = df_day[df_day["Strategy"].isin(selected_strats)]
 
-# Section 2: Action Selection
 st.sidebar.markdown("**Action Selection**")
 all_actions = sorted([str(a) for a in df_raw["Action"].dropna().unique() if str(a).strip()])
 
@@ -399,7 +421,6 @@ df_day = df_day[df_day["Action"].isin(selected_actions)]
 
 st.sidebar.markdown("---")
 
-# Sliders with persistence
 max_risk = st.sidebar.slider(
     "Max Risk (%)", 
     min_value=0.5, 
@@ -422,7 +443,6 @@ min_dist_52wh = st.sidebar.slider(
 st.session_state.pref_dist = min_dist_52wh
 df_day = df_day[df_day["Dist_52WH"] >= min_dist_52wh]
 
-# Sync state to URL Query Parameters so refresh retains settings
 st.query_params["date"] = selected_date_str
 st.query_params["wl"] = "1" if only_watchlist else "0"
 st.query_params["strats"] = ",".join(selected_strats)
@@ -431,7 +451,7 @@ st.query_params["risk"] = str(max_risk)
 st.query_params["dist"] = str(min_dist_52wh)
 
 # ----------------------------------------------------------------------
-# 6. TOP HEADER & KPI METRICS
+# 7. TOP HEADER & KPI METRICS
 # ----------------------------------------------------------------------
 st.markdown("<div class=\"dashboard-title\">📊 Market Signals Hub</div>", unsafe_allow_html=True)
 
@@ -443,7 +463,7 @@ kpi3.metric("AVWAP Bounces", len(df_day[df_day["Strategy"] == "AVWAP Bounce"]))
 kpi4.metric("Liquidity Sweeps", len(df_day[df_day["Strategy"] == "Liquidity Sweep"]))
 
 # ----------------------------------------------------------------------
-# 7. WORKSPACE TABS (CONDENSED TO PREVENT HORIZONTAL SCROLL)
+# 8. WORKSPACE TABS
 # ----------------------------------------------------------------------
 tab_signals, tab_overview, tab_watchlist, tab_notes = st.tabs([
     f"📋 Signals ({len(df_day)})", 
@@ -452,13 +472,11 @@ tab_signals, tab_overview, tab_watchlist, tab_notes = st.tabs([
     f"📝 Notes ({len(st.session_state.signal_notes)})"
 ])
 
-# --- TAB 1: SIGNALS TABLE (AUTO-FIT, ZERO HORIZONTAL SCROLL) ---
+# --- TAB 1: SIGNALS TABLE ---
 with tab_signals:
     if df_day.empty:
         st.info(f"No signals match the filters for {selected_date_str}.")
     else:
-        st.caption("💡 *Edit '📝 Note' to save observations. Check '⭐' to add to Watchlist.*")
-
         table_df = pd.DataFrame()
         table_df["Date"] = df_day["Date"].astype(str)
         table_df["Symbol"] = df_day["Symbol"].astype(str)
@@ -480,62 +498,59 @@ with tab_signals:
         table_df["Vol"] = df_day["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
         table_df["1W Vol"] = df_day["Avg_1W_Volume"].apply(lambda v: format_indian_currency(v, 0))
         table_df["Chart"] = df_day["TradingView_URL"]
-        table_df["📝 Note"] = df_day["Symbol"].apply(lambda s: st.session_state.signal_notes.get(s, {}).get("note", ""))
+        
+        table_df["📝"] = df_day["Symbol"].apply(lambda s: "📝" if s in st.session_state.signal_notes else "-")
         table_df["⭐"] = df_day["Symbol"].apply(lambda s: s in st.session_state.watchlist_symbols)
 
         edited_table = st.data_editor(
             table_df,
             column_config={
-                "Date": st.column_config.TextColumn("Date", width="small", alignment="center"),
-                "Symbol": st.column_config.TextColumn("Symbol", width="small", alignment="center"),
-                "Strategy": st.column_config.TextColumn("Strategy", width="small", alignment="center"),
-                "Action": st.column_config.TextColumn("Action", width="small", alignment="center"),
-                "Hits": st.column_config.NumberColumn("Hits", width="small", alignment="center"),
-                "Time": st.column_config.TextColumn("Time", width="small", alignment="center"),
-                "LTP": st.column_config.TextColumn("LTP", width="small", alignment="center"),
-                "SL": st.column_config.TextColumn("SL", width="small", alignment="center"),
-                "Risk%": st.column_config.TextColumn("Risk%", width="small", alignment="center"),
-                "52WH": st.column_config.TextColumn("52WH", width="small", alignment="center"),
-                "52W Date": st.column_config.TextColumn("52W Date", width="small", alignment="center"),
-                "Dist%": st.column_config.TextColumn("Dist%", width="small", alignment="center"),
-                "R²": st.column_config.TextColumn("R²", width="small", alignment="center"),
-                "RSI": st.column_config.TextColumn("RSI", width="small", alignment="center"),
-                "Turnover": st.column_config.TextColumn("Turnover", width="small", alignment="center"),
-                "MCap": st.column_config.TextColumn("MCap", width="small", alignment="center"),
-                "Vol": st.column_config.TextColumn("Vol", width="small", alignment="center"),
-                "1W Vol": st.column_config.TextColumn("1W Vol", width="small", alignment="center"),
-                "Chart": st.column_config.LinkColumn("Chart", width="small", display_text="Open ↗", alignment="center"),
-                "📝 Note": st.column_config.TextColumn("📝 Note", width="medium"),
-                "⭐": st.column_config.CheckboxColumn("⭐", width="small", default=False)
+                "Date": st.column_config.TextColumn("Date", width=85, alignment="center"),
+                "Symbol": st.column_config.TextColumn("Symbol", width=110, alignment="center"),
+                "Strategy": st.column_config.TextColumn("Strategy", width=120, alignment="center"),
+                "Action": st.column_config.TextColumn("Action", width=130, alignment="center"),
+                "Hits": st.column_config.NumberColumn("Hits", width=50, alignment="center"),
+                "Time": st.column_config.TextColumn("Time", width=65, alignment="center"),
+                "LTP": st.column_config.TextColumn("LTP", width=85, alignment="center"),
+                "SL": st.column_config.TextColumn("SL", width=85, alignment="center"),
+                "Risk%": st.column_config.TextColumn("Risk%", width=60, alignment="center"),
+                "52WH": st.column_config.TextColumn("52WH", width=85, alignment="center"),
+                "52W Date": st.column_config.TextColumn("52W Date", width=85, alignment="center"),
+                "Dist%": st.column_config.TextColumn("Dist%", width=65, alignment="center"),
+                "R²": st.column_config.TextColumn("R²", width=50, alignment="center"),
+                "RSI": st.column_config.TextColumn("RSI", width=50, alignment="center"),
+                "Turnover": st.column_config.TextColumn("Turnover", width=75, alignment="center"),
+                "MCap": st.column_config.TextColumn("MCap", width=80, alignment="center"),
+                "Vol": st.column_config.TextColumn("Vol", width=80, alignment="center"),
+                "1W Vol": st.column_config.TextColumn("1W Vol", width=80, alignment="center"),
+                "Chart": st.column_config.LinkColumn("Chart", width=65, display_text="Open ↗", alignment="center"),
+                "📝": st.column_config.TextColumn("📝", width=40, alignment="center"),
+                "⭐": st.column_config.CheckboxColumn("⭐", width=45, default=False)
             },
-            disabled=[c for c in table_df.columns if c not in ["⭐", "📝 Note"]],
+            disabled=[c for c in table_df.columns if c != "⭐"],
             hide_index=True,
             use_container_width=True,
             height=660,
             key="signals_data_editor"
         )
 
-        for _, r in edited_table.iterrows():
-            sym = r["Symbol"]
-            is_st = bool(r["⭐"])
-            user_note = str(r["📝 Note"]).strip()
+        updated_stars = set(edited_table[edited_table["⭐"] == True]["Symbol"])
+        unstarred_in_current_view = set(edited_table[edited_table["⭐"] == False]["Symbol"])
+        st.session_state.watchlist_symbols.update(updated_stars)
+        st.session_state.watchlist_symbols.difference_update(unstarred_in_current_view)
 
-            if is_st:
-                st.session_state.watchlist_symbols.add(sym)
-            else:
-                st.session_state.watchlist_symbols.discard(sym)
+        n_col1, n_col2 = st.columns([4, 1])
+        with n_col1:
+            sym_list = sorted(list(df_day["Symbol"].unique()))
+            chosen_sym = st.selectbox("Select Symbol to view / edit trade plan note:", options=sym_list, key="table_note_picker")
+        with n_col2:
+            st.write("")
+            st.write("")
+            if st.button("📝 Edit Note", use_container_width=True):
+                row_match = df_day[df_day["Symbol"] == chosen_sym].iloc[0]
+                open_note_modal(chosen_sym, row_match["Strategy"], format_indian_currency(row_match["LTP"], 2))
 
-            if user_note:
-                st.session_state.signal_notes[sym] = {
-                    "note": user_note,
-                    "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "strategy": r["Strategy"],
-                    "ltp": r["LTP"]
-                }
-            elif sym in st.session_state.signal_notes and not user_note:
-                st.session_state.signal_notes.pop(sym, None)
-
-# --- TAB 2: OVERVIEW CARDS (CLEAN 4-COLUMN RESPONSIVE GRID) ---
+# --- TAB 2: OVERVIEW CARDS ---
 with tab_overview:
     if active_setups.empty:
         st.info(f"No active setups found matching filters for {selected_date_str}.")
@@ -584,7 +599,7 @@ with tab_overview:
                         </div>
                         """, unsafe_allow_html=True)
 
-# --- TAB 3: WATCHLIST (ZERO HORIZONTAL SCROLL) ---
+# --- TAB 3: WATCHLIST ---
 with tab_watchlist:
     st.markdown(f"### ⭐ Shortlisted Watchlist ({len(st.session_state.watchlist_symbols)})")
     
@@ -617,31 +632,33 @@ with tab_watchlist:
         st.dataframe(
             watch_display,
             column_config={
-                "Symbol": st.column_config.TextColumn("Symbol", width="small", alignment="center"),
-                "Strategy": st.column_config.TextColumn("Strategy", width="small", alignment="center"),
-                "Action": st.column_config.TextColumn("Action", width="small", alignment="center"),
-                "LTP": st.column_config.TextColumn("LTP", width="small", alignment="center"),
-                "SL": st.column_config.TextColumn("SL", width="small", alignment="center"),
-                "Risk%": st.column_config.TextColumn("Risk%", width="small", alignment="center"),
-                "52WH": st.column_config.TextColumn("52WH", width="small", alignment="center"),
-                "52W Date": st.column_config.TextColumn("52W Date", width="small", alignment="center"),
-                "Dist%": st.column_config.TextColumn("Dist%", width="small", alignment="center"),
-                "Vol": st.column_config.TextColumn("Vol", width="small", alignment="center"),
-                "MCap": st.column_config.TextColumn("MCap", width="small", alignment="center"),
-                "Chart": st.column_config.LinkColumn("Chart", width="small", display_text="Open ↗", alignment="center")
+                "Symbol": st.column_config.TextColumn("Symbol", width=110, alignment="center"),
+                "Strategy": st.column_config.TextColumn("Strategy", width=120, alignment="center"),
+                "Action": st.column_config.TextColumn("Action", width=130, alignment="center"),
+                "LTP": st.column_config.TextColumn("LTP", width=85, alignment="center"),
+                "SL": st.column_config.TextColumn("SL", width=85, alignment="center"),
+                "Risk%": st.column_config.TextColumn("Risk%", width=60, alignment="center"),
+                "52WH": st.column_config.TextColumn("52WH", width=85, alignment="center"),
+                "52W Date": st.column_config.TextColumn("52W Date", width=85, alignment="center"),
+                "Dist%": st.column_config.TextColumn("Dist%", width=65, alignment="center"),
+                "Vol": st.column_config.TextColumn("Vol", width=80, alignment="center"),
+                "MCap": st.column_config.TextColumn("MCap", width=80, alignment="center"),
+                "Chart": st.column_config.LinkColumn("Chart", width=65, display_text="Open ↗", alignment="center")
             },
             hide_index=True,
             use_container_width=True,
             height=450
         )
 
-# --- TAB 4: SIGNAL NOTES DIRECTORY (FIT SCREEN) ---
+# --- TAB 4: SIGNAL NOTES DIRECTORY (INLINE EDITABLE DIRECTORY) ---
 with tab_notes:
     st.markdown(f"### 📝 Saved Trade Notes ({len(st.session_state.signal_notes)})")
 
     if not st.session_state.signal_notes:
-        st.info("No trade notes saved yet. Type directly in the '📝 Note' column of the Signals Table to record trade plans.")
+        st.info("No trade notes saved yet. Use the note launcher below the Signals Table to attach notes to setups.")
     else:
+        st.caption("💡 *Click directly into any cell under 'Observation / Trade Plan' to update notes in real-time. Clear the text to delete a note.*")
+
         note_rows = []
         for sym, data in st.session_state.signal_notes.items():
             tv_link = sanitize_tv_url(sym)
@@ -649,27 +666,42 @@ with tab_notes:
                 "Symbol": sym,
                 "Strategy": data.get("strategy", "-"),
                 "LTP": data.get("ltp", "-"),
-                "Note": data.get("note", ""),
+                "Observation / Trade Plan": data.get("note", ""),
                 "Updated At": data.get("updated_at", "-"),
                 "Chart": tv_link
             })
 
         notes_df = pd.DataFrame(note_rows)
 
-        st.dataframe(
+        # Interactive editor allows direct typing into note cells
+        edited_notes = st.data_editor(
             notes_df,
             column_config={
-                "Symbol": st.column_config.TextColumn("Symbol", width="small", alignment="center"),
-                "Strategy": st.column_config.TextColumn("Strategy", width="small", alignment="center"),
-                "LTP": st.column_config.TextColumn("LTP", width="small", alignment="center"),
-                "Note": st.column_config.TextColumn("Observation / Trade Plan", width="large"),
-                "Updated At": st.column_config.TextColumn("Updated At", width="small", alignment="center"),
-                "Chart": st.column_config.LinkColumn("TradingView", width="small", display_text="Open ↗", alignment="center")
+                "Symbol": st.column_config.TextColumn("Symbol", width=110, alignment="center"),
+                "Strategy": st.column_config.TextColumn("Strategy", width=120, alignment="center"),
+                "LTP": st.column_config.TextColumn("LTP", width=85, alignment="center"),
+                "Observation / Trade Plan": st.column_config.TextColumn("Observation / Trade Plan", width="large"),
+                "Updated At": st.column_config.TextColumn("Updated At", width=120, alignment="center"),
+                "Chart": st.column_config.LinkColumn("TradingView", width=80, display_text="Open ↗", alignment="center")
             },
+            disabled=["Symbol", "Strategy", "LTP", "Updated At", "Chart"],
             hide_index=True,
             use_container_width=True,
-            height=450
+            height=450,
+            key="notes_data_editor"
         )
+
+        # Sync updates made inside Tab 4
+        for _, row_item in edited_notes.iterrows():
+            sym = row_item["Symbol"]
+            new_text = str(row_item["Observation / Trade Plan"]).strip()
+
+            if sym in st.session_state.signal_notes:
+                if new_text and new_text != st.session_state.signal_notes[sym]["note"]:
+                    st.session_state.signal_notes[sym]["note"] = new_text
+                    st.session_state.signal_notes[sym]["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                elif not new_text:
+                    st.session_state.signal_notes.pop(sym, None)
 
         if st.button("🗑️ Clear All Notes", key="btn_clear_all_notes"):
             st.session_state.signal_notes.clear()
