@@ -441,12 +441,12 @@ tab_signals, tab_overview, tab_watchlist, tab_notes = st.tabs([
     f"📝 Notes ({len(st.session_state.signal_notes)})"
 ])
 
-# --- TAB 1: SIGNALS TABLE (WATCHLIST STAR AS LAST COLUMN) ---
+# --- TAB 1: SIGNALS TABLE (WATCHLIST STAR AS INTERACTIVE LAST COLUMN) ---
 with tab_signals:
     if df_day.empty:
         st.info(f"No signals match the filters for {selected_date_str}.")
     else:
-        st.caption("💡 *Select '⭐ Watch' in the last column to bookmark a stock | Use the Note launcher below for trade plans.*")
+        st.caption("💡 *Click the checkbox in the ⭐ Star column to add or remove any stock from your Watchlist.*")
 
         table_df = pd.DataFrame()
         table_df["Date"] = df_day["Date"].astype(str)
@@ -472,8 +472,8 @@ with tab_signals:
         table_df["TradingView_URL"] = df_day["TradingView_URL"]
         table_df["Has_Note"] = df_day["Symbol"].apply(lambda s: "📝 Yes" if s in st.session_state.signal_notes else "-")
         
-        # Star selector positioned as the very last column
-        table_df["Watchlist"] = df_day["Symbol"].apply(lambda s: "⭐ Watch" if s in st.session_state.watchlist_symbols else "☆ Unwatched")
+        # Interactive Watchlist toggle placed as the very last column
+        table_df["⭐ Star"] = df_day["Symbol"].apply(lambda s: s in st.session_state.watchlist_symbols)
 
         edited_table = st.data_editor(
             table_df,
@@ -498,24 +498,18 @@ with tab_signals:
                 "Avg_1W_Volume": st.column_config.TextColumn("1W Avg Vol", alignment="center"),
                 "TradingView_URL": st.column_config.LinkColumn("Chart", display_text="Open ↗", alignment="center"),
                 "Has_Note": st.column_config.TextColumn("Note", alignment="center"),
-                "Watchlist": st.column_config.SelectboxColumn(
-                    "Watchlist",
-                    options=["☆ Unwatched", "⭐ Watch"],
-                    default="☆ Unwatched",
-                    required=True,
-                    alignment="center"
-                )
+                "⭐ Star": st.column_config.CheckboxColumn("⭐ Star", default=False)
             },
-            disabled=[c for c in table_df.columns if c != "Watchlist"],
+            disabled=[c for c in table_df.columns if c != "⭐ Star"],
             hide_index=True,
             use_container_width=True,
             height=600,
             key="signals_data_editor"
         )
 
-        # Synchronize Star toggles from the selectbox column
-        updated_stars = set(edited_table[edited_table["Watchlist"] == "⭐ Watch"]["Symbol"])
-        unstarred_in_current_view = set(edited_table[edited_table["Watchlist"] == "☆ Unwatched"]["Symbol"])
+        # Synchronize Star toggles from table
+        updated_stars = set(edited_table[edited_table["⭐ Star"] == True]["Symbol"])
+        unstarred_in_current_view = set(edited_table[edited_table["⭐ Star"] == False]["Symbol"])
         st.session_state.watchlist_symbols.update(updated_stars)
         st.session_state.watchlist_symbols.difference_update(unstarred_in_current_view)
 
