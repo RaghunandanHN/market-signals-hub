@@ -8,11 +8,70 @@ import streamlit as st
 st.set_page_config(
     page_title="Market Signals Hub",
     page_icon="📊",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 # ----------------------------------------------------------------------
-# 1. FORMATTING HELPERS (Indian Numbering, Date & Time Parsers)
+# 1. UI REAL ESTATE OPTIMIZATION (COMPACT PADDING & NO BLANK WHITESPACE)
+# ----------------------------------------------------------------------
+st.markdown("""
+<style>
+    /* Drastically reduce default Streamlit container padding */
+    .block-container {
+        padding-top: 1.2rem !important;
+        padding-bottom: 0.5rem !important;
+        padding-left: 1.8rem !important;
+        padding-right: 1.8rem !important;
+    }
+    
+    /* Compact Title Header */
+    h1 {
+        font-size: 1.7rem !important;
+        font-weight: 700 !important;
+        margin-top: -0.8rem !important;
+        margin-bottom: 0.4rem !important;
+        padding-bottom: 0rem !important;
+    }
+
+    /* Compact Metric Blocks */
+    div[data-testid="stMetric"] {
+        padding: 0px !important;
+        margin-bottom: -0.5rem !important;
+    }
+    div[data-testid="stMetricLabel"] > div {
+        font-size: 0.82rem !important;
+        color: #6c757d !important;
+    }
+    div[data-testid="stMetricValue"] > div {
+        font-size: 1.45rem !important;
+        font-weight: 700 !important;
+        line-height: 1.2 !important;
+    }
+
+    /* Compact Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px !important;
+        margin-top: 0.4rem !important;
+        margin-bottom: 0.4rem !important;
+    }
+    .stTabs [data-baseweb="tab"] {
+        padding-top: 4px !important;
+        padding-bottom: 6px !important;
+        font-size: 0.95rem !important;
+    }
+
+    /* Compact Section Subheaders */
+    h3 {
+        font-size: 1.15rem !important;
+        margin-top: 0.2rem !important;
+        margin-bottom: 0.4rem !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ----------------------------------------------------------------------
+# 2. FORMATTING HELPERS (Indian Numbering, Date & Time Parsers)
 # ----------------------------------------------------------------------
 def format_indian_currency(val, decimals=2, prefix=""):
     """Formats numbers to Indian comma grouping (e.g. 12,087.00 or 1,075,937)."""
@@ -68,10 +127,7 @@ def format_last_seen_time(val):
     """Converts Sheets day fractions (0.57407...) or raw strings to HH:MM format."""
     if pd.isna(val) or val == "" or val is None:
         return "-"
-    
     val_str = str(val).strip()
-    
-    # Try parsing numeric day fraction (e.g., 0.5740740740741)
     try:
         f_val = float(val_str)
         if 0.0 <= f_val < 1.0:
@@ -82,13 +138,10 @@ def format_last_seen_time(val):
     except ValueError:
         pass
 
-    # Try parsing time strings like '13:46:40' or '13:46'
     try:
         parts = val_str.split(":")
         if len(parts) >= 2:
-            h = int(parts[0])
-            m = int(parts[1])
-            return f"{h:02d}:{m:02d}"
+            return f"{int(parts[0]):02d}:{int(parts[1]):02d}"
     except Exception:
         pass
 
@@ -102,7 +155,7 @@ def extract_tv_url(formula_str):
     return match.group(1) if match else (formula_str if formula_str.startswith("http") else "")
 
 # ----------------------------------------------------------------------
-# 2. DATA INGESTION (Streamlit Cloud Secrets)
+# 3. DATA INGESTION (Streamlit Cloud Secrets)
 # ----------------------------------------------------------------------
 @st.cache_data(ttl=15)
 def load_sheet_data():
@@ -138,7 +191,8 @@ def load_sheet_data():
             "Today's Volume": "Today_Volume",
             "1W Avg Volume": "Avg_1W_Volume",
             "Alert Count": "Alert_Count",
-            "Last Seen": "Last_Seen"
+            "Last Seen": "Last_Seen",
+            "52W High Date": "High_52W_Date"
         }
         df.rename(columns=col_map, inplace=True)
 
@@ -151,6 +205,11 @@ def load_sheet_data():
             df["Last_Seen"] = df["Last_Seen"].apply(format_last_seen_time)
         else:
             df["Last_Seen"] = "-"
+
+        if "High_52W_Date" not in df.columns:
+            df["High_52W_Date"] = "-"
+        else:
+            df["High_52W_Date"] = df["High_52W_Date"].astype(str).replace("", "-")
 
         if "TradingView_URL" in df.columns:
             df["TradingView_URL"] = df["TradingView_URL"].apply(extract_tv_url)
@@ -177,17 +236,15 @@ def load_sheet_data():
 df_raw = load_sheet_data()
 
 # ----------------------------------------------------------------------
-# 3. SIDEBAR: INTERACTIVE CALENDAR & FLAT STRATEGY CHECKBOXES
+# 4. SIDEBAR: DATE, FLAT STRATEGY CHECKBOXES, RISK & 52WH SLIDERS
 # ----------------------------------------------------------------------
-st.title("📊 Market Signals Hub")
+st.sidebar.markdown("### 🔍 Signal Filters")
 
 if df_raw.empty:
     st.warning("No data found in Google Sheet. Run your scan script first.")
     st.stop()
 
-st.sidebar.header("🔍 Signal Filters")
-
-# Convert available date strings to date objects
+# Date selector
 available_dates = []
 for d_str in df_raw["Date"].dropna().unique():
     try:
@@ -195,16 +252,10 @@ for d_str in df_raw["Date"].dropna().unique():
     except ValueError:
         pass
 
-if available_dates:
-    default_date = max(available_dates)
-    min_date = min(available_dates)
-    max_date = max(available_dates)
-else:
-    default_date = date.today()
-    min_date = date(2020, 1, 1)
-    max_date = date.today()
+default_date = max(available_dates) if available_dates else date.today()
+min_date = min(available_dates) if available_dates else date(2020, 1, 1)
+max_date = max(available_dates) if available_dates else date.today()
 
-# Popup calendar widget
 picked_date = st.sidebar.date_input(
     "Session Date",
     value=default_date,
@@ -217,7 +268,7 @@ selected_date_str = picked_date.strftime("%Y-%m-%d")
 df_day = df_raw[df_raw["Date"] == selected_date_str].copy()
 
 # Flat Strategy Checkbox Multi-Selection
-st.sidebar.write("**Strategy Filter**")
+st.sidebar.markdown("**Strategy Selection**")
 all_strats = sorted([str(s) for s in df_raw["Strategy"].dropna().unique()])
 
 selected_strats = []
@@ -227,11 +278,28 @@ for strat in all_strats:
 
 df_day = df_day[df_day["Strategy"].isin(selected_strats)]
 
-# Risk slider filter
+# Slider 1: Risk Cutoff
 max_risk = st.sidebar.slider("Max Risk (%)", min_value=0.5, max_value=6.0, value=5.5, step=0.1)
 df_day = df_day[df_day["Risk_Pct"] <= max_risk]
 
-# Top KPI Summary Cards
+# Slider 2: Dist 52WH Cutoff (e.g. -25% to 0%)
+dist_min = float(round(df_raw["Dist_52WH"].min() - 1, 0)) if not df_raw.empty else -30.0
+dist_min = min(dist_min, -30.0)
+min_dist_52wh = st.sidebar.slider(
+    "Max Pullback from 52WH (%)", 
+    min_value=dist_min, 
+    max_value=0.0, 
+    value=dist_min, 
+    step=0.5,
+    help="Filters out stocks that dropped more than this % from their 52-week high"
+)
+df_day = df_day[df_day["Dist_52WH"] >= min_dist_52wh]
+
+# ----------------------------------------------------------------------
+# 5. TOP COMPACT HEADER & SUMMARY KPI ROW
+# ----------------------------------------------------------------------
+st.markdown("<h1>📊 Market Signals Hub</h1>", unsafe_allow_html=True)
+
 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
 active_setups = df_day[df_day["Action"].str.contains("Ready", case=False, na=False)]
 kpi1.metric("Active Ready Setups", len(active_setups))
@@ -240,44 +308,16 @@ kpi3.metric("AVWAP Bounces", len(df_day[df_day["Strategy"] == "AVWAP Bounce"]))
 kpi4.metric("Liquidity Sweeps", len(df_day[df_day["Strategy"] == "Liquidity Sweep"]))
 
 # ----------------------------------------------------------------------
-# 4. TABS (Overview, Signals, Watchlist)
+# 6. TABS (Signals, Overview, Watchlist)
 # ----------------------------------------------------------------------
-tab_overview, tab_signals, tab_watchlist = st.tabs(["Overview", "Signals", "Watchlist"])
+tab_signals, tab_overview, tab_watchlist = st.tabs(["📋 Signals Table", "📌 Overview Cards", "⭐ Watchlist"])
 
-# --- TAB 1: OVERVIEW (CARD GRID) ---
-with tab_overview:
-    st.subheader(f"Active Ready Setups ({len(active_setups)})")
-    if active_setups.empty:
-        st.info(f"No active setups found matching filters for {selected_date_str}.")
-    else:
-        cols_per_row = 3
-        chunks = [active_setups.iloc[i:i + cols_per_row] for i in range(0, len(active_setups), cols_per_row)]
-        for chunk in chunks:
-            grid = st.columns(cols_per_row)
-            for idx, (_, row) in enumerate(chunk.iterrows()):
-                with grid[idx]:
-                    with st.container(border=True):
-                        st.markdown(f"### {row['Symbol']}")
-                        st.caption(f"{row['Strategy']} • :green[{row['Action']}]")
-                        c1, c2 = st.columns(2)
-                        c1.markdown(f"**LTP:** {format_indian_currency(row['LTP'], 2, '₹')}")
-                        c1.markdown(f"**SL:** {format_indian_currency(row['Stop_Loss'], 2, '₹')}")
-                        c1.markdown(f"**RSI:** {row['RSI']:.1f}")
-                        c1.markdown(f"**Today Vol:** {format_indian_currency(row['Today_Volume'], 0)}")
-
-                        c2.markdown(f"**Risk:** {row['Risk_Pct']:.2f}%")
-                        c2.markdown(f"**R²:** {row['R2']:.2f}")
-                        c2.markdown(f"**MCap:** {format_indian_currency(row['Market_Cap_Cr'], 0, '₹')} Cr")
-                        c2.markdown(f"**1W Vol:** {format_indian_currency(row['Avg_1W_Volume'], 0)}")
-                        if row["TradingView_URL"]:
-                            st.link_button("TradingView ↗", row["TradingView_URL"], use_container_width=True)
-
-# --- TAB 2: SIGNALS TABLE ---
+# --- TAB 1: SIGNALS (FULL DATA TABLE PRIORITIZED) ---
 with tab_signals:
-    st.subheader(f"All Signals ({len(df_day)})")
+    st.markdown(f"### All Signals ({len(df_day)})")
 
     if df_day.empty:
-        st.info(f"No signals recorded matching the criteria for {selected_date_str}.")
+        st.info(f"No signals match the filters for {selected_date_str}.")
     else:
         display_df = pd.DataFrame()
         display_df["Date"] = df_day["Date"].astype(str)
@@ -292,6 +332,7 @@ with tab_signals:
         display_df["Stop_Loss"] = df_day["Stop_Loss"].apply(lambda v: format_indian_currency(v, 2, "₹"))
         display_df["Risk_Pct"] = df_day["Risk_Pct"].apply(lambda v: f"{v:.2f}%")
         display_df["High_52W"] = df_day["High_52W"].apply(lambda v: format_indian_currency(v, 2, "₹"))
+        display_df["High_52W_Date"] = df_day["High_52W_Date"].astype(str)
         display_df["Dist_52WH"] = df_day["Dist_52WH"].apply(lambda v: f"{v:.2f}%")
         display_df["R2"] = df_day["R2"].apply(lambda v: f"{v:.2f}")
         display_df["RSI"] = df_day["RSI"].apply(lambda v: f"{v:.1f}")
@@ -314,6 +355,7 @@ with tab_signals:
                 "Stop_Loss": st.column_config.TextColumn("Stop Loss", alignment="center"),
                 "Risk_Pct": st.column_config.TextColumn("Risk (%)", alignment="center"),
                 "High_52W": st.column_config.TextColumn("52W High", alignment="center"),
+                "High_52W_Date": st.column_config.TextColumn("52W High Date", alignment="center"),
                 "Dist_52WH": st.column_config.TextColumn("Dist 52WH", alignment="center"),
                 "R2": st.column_config.TextColumn("R²", alignment="center"),
                 "RSI": st.column_config.TextColumn("RSI", alignment="center"),
@@ -325,12 +367,42 @@ with tab_signals:
             },
             hide_index=True,
             use_container_width=True,
-            height=650
+            height=700
         )
+
+# --- TAB 2: OVERVIEW CARDS ---
+with tab_overview:
+    st.markdown(f"### Active Ready Setups ({len(active_setups)})")
+    if active_setups.empty:
+        st.info(f"No active setups found matching filters for {selected_date_str}.")
+    else:
+        cols_per_row = 3
+        chunks = [active_setups.iloc[i:i + cols_per_row] for i in range(0, len(active_setups), cols_per_row)]
+        for chunk in chunks:
+            grid = st.columns(cols_per_row)
+            for idx, (_, row) in enumerate(chunk.iterrows()):
+                with grid[idx]:
+                    with st.container(border=True):
+                        st.markdown(f"### {row['Symbol']}")
+                        st.caption(f"{row['Strategy']} • :green[{row['Action']}]")
+                        c1, c2 = st.columns(2)
+                        c1.markdown(f"**LTP:** {format_indian_currency(row['LTP'], 2, '₹')}")
+                        c1.markdown(f"**SL:** {format_indian_currency(row['Stop_Loss'], 2, '₹')}")
+                        c1.markdown(f"**52WH:** {format_indian_currency(row['High_52W'], 2, '₹')}")
+                        c1.markdown(f"**52WH Date:** {row['High_52W_Date']}")
+                        c1.markdown(f"**Today Vol:** {format_indian_currency(row['Today_Volume'], 0)}")
+
+                        c2.markdown(f"**Risk:** {row['Risk_Pct']:.2f}%")
+                        c2.markdown(f"**R²:** {row['R2']:.2f} | **RSI:** {row['RSI']:.1f}")
+                        c2.markdown(f"**Dist 52WH:** {row['Dist_52WH']:.2f}%")
+                        c2.markdown(f"**MCap:** {format_indian_currency(row['Market_Cap_Cr'], 0, '₹')} Cr")
+                        c2.markdown(f"**1W Vol:** {format_indian_currency(row['Avg_1W_Volume'], 0)}")
+                        if row["TradingView_URL"]:
+                            st.link_button("TradingView ↗", row["TradingView_URL"], use_container_width=True)
 
 # --- TAB 3: WATCHLIST ---
 with tab_watchlist:
-    st.subheader("Priority Trigger Watchlist")
+    st.markdown("### Priority Trigger Watchlist")
     watchlist_df = df_day[df_day["Action"].isin(["Retested & Ready", "Ready (ORB)", "Confirm Reclaim"])]
     if watchlist_df.empty:
         st.info(f"Watchlist is clear for {selected_date_str}.")
@@ -340,6 +412,6 @@ with tab_watchlist:
                 r1, r2, r3, r4 = st.columns([2, 3, 3, 2])
                 r1.markdown(f"**{row['Symbol']}**\n\n*{row['Strategy']}*")
                 r2.markdown(f"**LTP:** {format_indian_currency(row['LTP'], 2, '₹')} | **Risk:** {row['Risk_Pct']:.2f}%\n\n**Action:** :green[{row['Action']}]")
-                r3.markdown(f"**MCap:** {format_indian_currency(row['Market_Cap_Cr'], 0, '₹')} Cr\n\n**Vol:** {format_indian_currency(row['Today_Volume'], 0)}")
+                r3.markdown(f"**52WH:** {format_indian_currency(row['High_52W'], 2, '₹')} ({row['High_52W_Date']})\n\n**Dist:** {row['Dist_52WH']:.2f}%")
                 if row["TradingView_URL"]:
                     r4.link_button("TradingView ↗", row["TradingView_URL"], use_container_width=True)
