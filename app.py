@@ -13,7 +13,7 @@ st.set_page_config(
 )
 
 # ----------------------------------------------------------------------
-# 1. CLEAN STYLING
+# 1. CLEAN STYLING & COMPACT METRICS
 # ----------------------------------------------------------------------
 st.markdown("""
 <style>
@@ -138,18 +138,41 @@ def format_indian_currency(val, decimals=2, prefix=""):
     return f"{sign}{prefix}{res}{dec_part}"
 
 def clean_date_str(val):
-    if pd.isna(val) or str(val).strip() == "":
-        return datetime.now().strftime("%Y-%m-%d")
+    """Parses Google Sheets serial day numbers (e.g. 46262) or date strings to YYYY-MM-DD."""
+    if pd.isna(val) or str(val).strip() in ["", "-", "N/A", "None"]:
+        return "-"
     val_str = str(val).strip()
+    
+    # Check if integer or float serial string (e.g. "46262" or "46262.0")
+    numeric_candidate = None
     if val_str.isdigit():
+        numeric_candidate = int(val_str)
+    else:
+        try:
+            f = float(val_str)
+            if f.is_integer() and f > 20000:
+                numeric_candidate = int(f)
+        except ValueError:
+            pass
+
+    if numeric_candidate is not None:
         try:
             base_date = datetime(1899, 12, 30)
-            return (base_date + pd.Timedelta(days=int(val_str))).strftime("%Y-%m-%d")
+            return (base_date + pd.Timedelta(days=numeric_candidate)).strftime("%Y-%m-%d")
         except Exception:
             return val_str
+
+    # Parse standard date string representations
+    for fmt in ("%d-%b-%Y", "%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(val_str, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+
     return val_str
 
 def format_last_seen_time(val):
+    """Converts Sheets day fractions (0.57407...) or raw strings to HH:MM format."""
     if pd.isna(val) or val == "" or val is None:
         return "-"
     val_str = str(val).strip()
@@ -235,10 +258,11 @@ def load_sheet_data():
         else:
             df["Last_Seen"] = "-"
 
-        if "High_52W_Date" not in df.columns:
-            df["High_52W_Date"] = "-"
+        # Converts 52W High serial numbers (46262, 45923) into clean dates
+        if "High_52W_Date" in df.columns:
+            df["High_52W_Date"] = df["High_52W_Date"].apply(clean_date_str)
         else:
-            df["High_52W_Date"] = df["High_52W_Date"].astype(str).replace("", "-")
+            df["High_52W_Date"] = "-"
 
         raw_urls = df["TradingView_URL"] if "TradingView_URL" in df.columns else [""] * len(df)
         df["TradingView_URL"] = [sanitize_tv_url(s, u) for s, u in zip(df["Symbol"], raw_urls)]
@@ -349,7 +373,7 @@ tab_signals, tab_overview, tab_watchlist, tab_notes = st.tabs([
     f"📝 Notes ({len(st.session_state.signal_notes)})"
 ])
 
-# --- TAB 1: SIGNALS TABLE (EDITABLE NOTE & STAR BOOKMARK) ---
+# --- TAB 1: SIGNALS TABLE ---
 with tab_signals:
     if df_day.empty:
         st.info(f"No signals match the filters for {selected_date_str}.")
@@ -377,11 +401,7 @@ with tab_signals:
         table_df["Today_Volume"] = df_day["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
         table_df["Avg_1W_Volume"] = df_day["Avg_1W_Volume"].apply(lambda v: format_indian_currency(v, 0))
         table_df["TradingView_URL"] = df_day["TradingView_URL"]
-
-        # Directly editable Notes column
         table_df["📝 My Note"] = df_day["Symbol"].apply(lambda s: st.session_state.signal_notes.get(s, {}).get("note", ""))
-        
-        # Interactive Star toggle as last column
         table_df["⭐ Star"] = df_day["Symbol"].apply(lambda s: s in st.session_state.watchlist_symbols)
 
         edited_table = st.data_editor(
@@ -416,7 +436,6 @@ with tab_signals:
             key="signals_data_editor"
         )
 
-        # Sync changes from data editor back to state
         for _, r in edited_table.iterrows():
             sym = r["Symbol"]
             is_st = bool(r["⭐ Star"])
@@ -437,7 +456,7 @@ with tab_signals:
             elif sym in st.session_state.signal_notes and not user_note:
                 st.session_state.signal_notes.pop(sym, None)
 
-# --- TAB 2: OVERVIEW CARDS (INTEGRATED CONTAINER BOX WITH INLINE STAR) ---
+# --- TAB 2: OVERVIEW CARDS ---
 with tab_overview:
     if active_setups.empty:
         st.info(f"No active setups found matching filters for {selected_date_str}.")
@@ -456,7 +475,6 @@ with tab_overview:
                 tv_url = row["TradingView_URL"]
 
                 with grid[idx]:
-                    # Using native Streamlit container puts all elements inside a single box
                     with st.container(border=True):
                         top_left, top_right = st.columns([5, 1])
                         with top_left:
@@ -474,7 +492,6 @@ with tab_overview:
                                     st.session_state.watchlist_symbols.add(sym)
                                 st.rerun()
 
-                        # Card statistics grid
                         st.markdown(f"""
                         <div class="card-grid">
                             <div><span class="card-label">LTP:</span> <span class="card-val">{format_indian_currency(row['LTP'], 2, '₹')}</span></div>
