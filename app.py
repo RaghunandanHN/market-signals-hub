@@ -13,31 +13,22 @@ st.set_page_config(
 )
 
 # ----------------------------------------------------------------------
-# 1. UI REAL ESTATE OPTIMIZATION (COMPACT CARDS, DIALOG & CSS)
+# 1. CLEAN STYLING
 # ----------------------------------------------------------------------
 st.markdown("""
 <style>
-    /* Global Container Padding */
     .block-container {
         padding-top: 2.2rem !important;
         padding-bottom: 0.5rem !important;
         padding-left: 1.5rem !important;
         padding-right: 1.5rem !important;
     }
-
-    /* Fixed Clean Header Title */
     .dashboard-title {
         font-size: 1.6rem;
         font-weight: 700;
-        margin-top: 0rem;
         margin-bottom: 0.3rem;
         color: #1E293B;
-        display: flex;
-        align-items: center;
-        gap: 8px;
     }
-
-    /* Compact Top KPI Metrics */
     div[data-testid="stMetric"] {
         padding: 0px !important;
         margin-bottom: -0.4rem !important;
@@ -51,48 +42,11 @@ st.markdown("""
         font-weight: 700 !important;
         line-height: 1.1 !important;
     }
-
-    /* Compact Tabs Bar */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 10px !important;
-        margin-top: 0.3rem !important;
-        margin-bottom: 0.3rem !important;
-    }
-    .stTabs [data-baseweb="tab"] {
-        padding-top: 3px !important;
-        padding-bottom: 5px !important;
-        font-size: 0.92rem !important;
-    }
-
-    /* Ultra-Compact Single-Screen Signal Card */
-    .signal-card {
-        background: #FFFFFF;
-        border: 1px solid #E2E8F0;
-        border-radius: 6px;
-        padding: 8px 10px;
-        margin-bottom: 8px;
-        font-size: 0.80rem;
-        line-height: 1.35;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.03);
-    }
-    .signal-card:hover {
-        border-color: #94A3B8;
-    }
-    .card-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        border-bottom: 1px solid #F1F5F9;
-        padding-bottom: 4px;
-        margin-bottom: 5px;
-    }
     .card-symbol-link {
-        font-size: 0.95rem;
+        font-size: 1.05rem;
         font-weight: 700;
         color: #1D4ED8 !important;
         text-decoration: none !important;
-        cursor: pointer !important;
-        pointer-events: auto !important;
     }
     .card-symbol-link:hover {
         text-decoration: underline !important;
@@ -101,55 +55,42 @@ st.markdown("""
     .badge-ready {
         background-color: #DCFCE7;
         color: #15803D;
-        font-size: 0.68rem;
+        font-size: 0.72rem;
         font-weight: 600;
         padding: 2px 6px;
         border-radius: 4px;
+        display: inline-block;
     }
     .badge-wait {
         background-color: #FEF9C3;
         color: #A16207;
-        font-size: 0.68rem;
+        font-size: 0.72rem;
         font-weight: 600;
         padding: 2px 6px;
         border-radius: 4px;
+        display: inline-block;
     }
     .card-grid {
         display: grid;
         grid-template-columns: 1fr 1fr;
         column-gap: 8px;
-        row-gap: 2px;
+        row-gap: 3px;
+        font-size: 0.81rem;
+        margin-top: 6px;
     }
     .card-label {
         color: #64748B;
-        font-size: 0.74rem;
+        font-size: 0.75rem;
     }
     .card-val {
         font-weight: 600;
         color: #1E293B;
     }
-
-    /* Integrated Inline Star Button within card */
-    .card-star-btn div[data-testid="stButton"] > button {
-        padding: 0px 4px !important;
-        height: 24px !important;
-        min-height: 24px !important;
-        font-size: 0.95rem !important;
-        line-height: 1 !important;
-        background: transparent !important;
-        border: none !important;
-        color: #F59E0B !important;
-        box-shadow: none !important;
-    }
-    .card-star-btn div[data-testid="stButton"] > button:hover {
-        background-color: #FEF3C7 !important;
-        border-radius: 4px !important;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # ----------------------------------------------------------------------
-# 2. STATE INITIALIZATION (WATCHLIST & PERSISTENT NOTES)
+# 2. STATE MANAGEMENT (WATCHLIST & PERSISTENT NOTES)
 # ----------------------------------------------------------------------
 if "watchlist_symbols" not in st.session_state:
     st.session_state.watchlist_symbols = set()
@@ -158,7 +99,7 @@ if "signal_notes" not in st.session_state:
     st.session_state.signal_notes = {}
 
 # ----------------------------------------------------------------------
-# 3. FORMATTING HELPERS (Indian Numbering, Date, Time & TV URL)
+# 3. HELPER FUNCTIONS
 # ----------------------------------------------------------------------
 def format_indian_currency(val, decimals=2, prefix=""):
     if pd.isna(val) or val == "" or val is None:
@@ -243,36 +184,7 @@ def sanitize_tv_url(symbol, formula_str=""):
     return f"https://www.tradingview.com/chart/qQrGXVOL/?symbol=NSE:{clean_sym}&interval=D"
 
 # ----------------------------------------------------------------------
-# 4. NOTE DIALOG POPUP
-# ----------------------------------------------------------------------
-@st.dialog("📝 Signal Trade Note")
-def open_note_modal(symbol, strategy, ltp):
-    current_entry = st.session_state.signal_notes.get(symbol, {})
-    current_note = current_entry.get("note", "")
-
-    st.markdown(f"**Stock:** `{symbol}` | **Strategy:** `{strategy}` | **LTP:** `₹{ltp}`")
-    new_note = st.text_area("Observations / Levels / Trade Plan:", value=current_note, height=140, placeholder="e.g. Volume dry-up noticed, enter if 15m candle closes above trigger level...")
-
-    c1, c2 = st.columns([3, 1])
-    with c1:
-        if st.button("💾 Save Note", use_container_width=True, type="primary"):
-            if new_note.strip():
-                st.session_state.signal_notes[symbol] = {
-                    "note": new_note.strip(),
-                    "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "strategy": strategy,
-                    "ltp": ltp
-                }
-            else:
-                st.session_state.signal_notes.pop(symbol, None)
-            st.rerun()
-    with c2:
-        if current_note and st.button("🗑️ Delete", use_container_width=True):
-            st.session_state.signal_notes.pop(symbol, None)
-            st.rerun()
-
-# ----------------------------------------------------------------------
-# 5. DATA INGESTION ENGINE
+# 4. DATA INGESTION
 # ----------------------------------------------------------------------
 @st.cache_data(ttl=15)
 def load_sheet_data():
@@ -351,7 +263,7 @@ def load_sheet_data():
 df_raw = load_sheet_data()
 
 # ----------------------------------------------------------------------
-# 6. SIDEBAR: DATE, WATCHLIST FILTER, STRATEGIES, RISK & DIST SLIDERS
+# 5. SIDEBAR FILTERS
 # ----------------------------------------------------------------------
 st.sidebar.markdown("### 🔍 Signal Filters")
 
@@ -381,17 +293,15 @@ picked_date = st.sidebar.date_input(
 selected_date_str = picked_date.strftime("%Y-%m-%d")
 df_day = df_raw[df_raw["Date"] == selected_date_str].copy()
 
-# Watchlist Dedicated Filter Checkbox
 st.sidebar.markdown("---")
 only_watchlist = st.sidebar.checkbox(
     f"⭐ Show Watchlist Only ({len(st.session_state.watchlist_symbols)})", 
     value=False,
-    help="Filters all views exclusively to stocks currently bookmarked"
+    help="Filters all views down to starred candidates only"
 )
 if only_watchlist:
     df_day = df_day[df_day["Symbol"].isin(st.session_state.watchlist_symbols)]
 
-# Flat Strategy Checkbox Multi-Selection
 st.sidebar.markdown("**Strategy Selection**")
 all_strats = sorted([str(s) for s in df_raw["Strategy"].dropna().unique()])
 
@@ -402,11 +312,9 @@ for strat in all_strats:
 
 df_day = df_day[df_day["Strategy"].isin(selected_strats)]
 
-# Slider 1: Risk Cutoff
 max_risk = st.sidebar.slider("Max Risk (%)", min_value=0.5, max_value=6.0, value=5.5, step=0.1)
 df_day = df_day[df_day["Risk_Pct"] <= max_risk]
 
-# Slider 2: Dist 52WH Cutoff
 dist_min = float(round(df_raw["Dist_52WH"].min() - 1, 0)) if not df_raw.empty else -30.0
 dist_min = min(dist_min, -30.0)
 min_dist_52wh = st.sidebar.slider(
@@ -415,12 +323,12 @@ min_dist_52wh = st.sidebar.slider(
     max_value=0.0, 
     value=dist_min, 
     step=0.5,
-    help="Filters out stocks that dropped more than this % from their 52-week high"
+    help="Filters out stocks that dropped more than this % from 52-week high"
 )
 df_day = df_day[df_day["Dist_52WH"] >= min_dist_52wh]
 
 # ----------------------------------------------------------------------
-# 7. TOP HEADER & COMPACT METRICS BAR
+# 6. TOP HEADER & METRIC SUMMARY
 # ----------------------------------------------------------------------
 st.markdown("<div class=\"dashboard-title\">📊 Market Signals Hub</div>", unsafe_allow_html=True)
 
@@ -432,7 +340,7 @@ kpi3.metric("AVWAP Bounces", len(df_day[df_day["Strategy"] == "AVWAP Bounce"]))
 kpi4.metric("Liquidity Sweeps", len(df_day[df_day["Strategy"] == "Liquidity Sweep"]))
 
 # ----------------------------------------------------------------------
-# 8. 4-TAB WORKSPACE (Signals Table, Overview Cards, Watchlist, Notes)
+# 7. WORKSPACE TABS
 # ----------------------------------------------------------------------
 tab_signals, tab_overview, tab_watchlist, tab_notes = st.tabs([
     f"📋 Signals Table ({len(df_day)})", 
@@ -441,12 +349,12 @@ tab_signals, tab_overview, tab_watchlist, tab_notes = st.tabs([
     f"📝 Notes ({len(st.session_state.signal_notes)})"
 ])
 
-# --- TAB 1: SIGNALS TABLE (WATCHLIST STAR AS INTERACTIVE LAST COLUMN) ---
+# --- TAB 1: SIGNALS TABLE (EDITABLE NOTE & STAR BOOKMARK) ---
 with tab_signals:
     if df_day.empty:
         st.info(f"No signals match the filters for {selected_date_str}.")
     else:
-        st.caption("💡 *Click the checkbox in the ⭐ Star column to add or remove any stock from your Watchlist.*")
+        st.caption("💡 *Edit '📝 My Note' directly to save notes. Check '⭐ Star' in the last column to add/remove from Watchlist.*")
 
         table_df = pd.DataFrame()
         table_df["Date"] = df_day["Date"].astype(str)
@@ -456,7 +364,6 @@ with tab_signals:
         table_df["Alert_Count"] = df_day["Alert_Count"].astype(int)
         table_df["Last_Seen"] = df_day["Last_Seen"].astype(str)
 
-        # Formatted Indian numbers
         table_df["LTP"] = df_day["LTP"].apply(lambda v: format_indian_currency(v, 2, "₹"))
         table_df["Stop_Loss"] = df_day["Stop_Loss"].apply(lambda v: format_indian_currency(v, 2, "₹"))
         table_df["Risk_Pct"] = df_day["Risk_Pct"].apply(lambda v: f"{v:.2f}%")
@@ -470,9 +377,11 @@ with tab_signals:
         table_df["Today_Volume"] = df_day["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
         table_df["Avg_1W_Volume"] = df_day["Avg_1W_Volume"].apply(lambda v: format_indian_currency(v, 0))
         table_df["TradingView_URL"] = df_day["TradingView_URL"]
-        table_df["Has_Note"] = df_day["Symbol"].apply(lambda s: "📝 Yes" if s in st.session_state.signal_notes else "-")
+
+        # Directly editable Notes column
+        table_df["📝 My Note"] = df_day["Symbol"].apply(lambda s: st.session_state.signal_notes.get(s, {}).get("note", ""))
         
-        # Interactive Watchlist toggle placed as the very last column
+        # Interactive Star toggle as last column
         table_df["⭐ Star"] = df_day["Symbol"].apply(lambda s: s in st.session_state.watchlist_symbols)
 
         edited_table = st.data_editor(
@@ -497,36 +406,38 @@ with tab_signals:
                 "Today_Volume": st.column_config.TextColumn("Today Vol", alignment="center"),
                 "Avg_1W_Volume": st.column_config.TextColumn("1W Avg Vol", alignment="center"),
                 "TradingView_URL": st.column_config.LinkColumn("Chart", display_text="Open ↗", alignment="center"),
-                "Has_Note": st.column_config.TextColumn("Note", alignment="center"),
+                "📝 My Note": st.column_config.TextColumn("📝 My Note", width="medium"),
                 "⭐ Star": st.column_config.CheckboxColumn("⭐ Star", default=False)
             },
-            disabled=[c for c in table_df.columns if c != "⭐ Star"],
+            disabled=[c for c in table_df.columns if c not in ["⭐ Star", "📝 My Note"]],
             hide_index=True,
             use_container_width=True,
-            height=600,
+            height=650,
             key="signals_data_editor"
         )
 
-        # Synchronize Star toggles from table
-        updated_stars = set(edited_table[edited_table["⭐ Star"] == True]["Symbol"])
-        unstarred_in_current_view = set(edited_table[edited_table["⭐ Star"] == False]["Symbol"])
-        st.session_state.watchlist_symbols.update(updated_stars)
-        st.session_state.watchlist_symbols.difference_update(unstarred_in_current_view)
+        # Sync changes from data editor back to state
+        for _, r in edited_table.iterrows():
+            sym = r["Symbol"]
+            is_st = bool(r["⭐ Star"])
+            user_note = str(r["📝 My Note"]).strip()
 
-        # Quick Note Launcher
-        st.markdown("---")
-        n_col1, n_col2 = st.columns([3, 1])
-        with n_col1:
-            sym_list = sorted(list(df_day["Symbol"].unique()))
-            chosen_sym = st.selectbox("Select Symbol to Add / Edit Note:", options=sym_list, key="table_note_picker")
-        with n_col2:
-            st.write("")
-            st.write("")
-            if st.button("📝 Open Note Modal", use_container_width=True):
-                row_match = df_day[df_day["Symbol"] == chosen_sym].iloc[0]
-                open_note_modal(chosen_sym, row_match["Strategy"], format_indian_currency(row_match["LTP"], 2))
+            if is_st:
+                st.session_state.watchlist_symbols.add(sym)
+            else:
+                st.session_state.watchlist_symbols.discard(sym)
 
-# --- TAB 2: OVERVIEW CARDS ---
+            if user_note:
+                st.session_state.signal_notes[sym] = {
+                    "note": user_note,
+                    "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "strategy": r["Strategy"],
+                    "ltp": r["LTP"]
+                }
+            elif sym in st.session_state.signal_notes and not user_note:
+                st.session_state.signal_notes.pop(sym, None)
+
+# --- TAB 2: OVERVIEW CARDS (INTEGRATED CONTAINER BOX WITH INLINE STAR) ---
 with tab_overview:
     if active_setups.empty:
         st.info(f"No active setups found matching filters for {selected_date_str}.")
@@ -541,32 +452,30 @@ with tab_overview:
                 is_starred = sym in st.session_state.watchlist_symbols
                 star_icon = "⭐" if is_starred else "☆"
                 has_note_tag = " 📝" if sym in st.session_state.signal_notes else ""
+                badge_class = "badge-ready" if "Ready" in str(row['Action']) else "badge-wait"
+                tv_url = row["TradingView_URL"]
 
                 with grid[idx]:
-                    badge_class = "badge-ready" if "Ready" in str(row['Action']) else "badge-wait"
-                    tv_url = row["TradingView_URL"]
+                    # Using native Streamlit container puts all elements inside a single box
+                    with st.container(border=True):
+                        top_left, top_right = st.columns([5, 1])
+                        with top_left:
+                            st.markdown(
+                                f"<a href=\"{tv_url}\" target=\"_blank\" class=\"card-symbol-link\">{sym} ↗</a> "
+                                f"<span style=\"font-size:0.75rem; color:#64748B;\">({row['Strategy']}){has_note_tag}</span><br>"
+                                f"<span class=\"{badge_class}\">{row['Action']}</span>",
+                                unsafe_allow_html=True
+                            )
+                        with top_right:
+                            if st.button(star_icon, key=f"card_star_{sym}", help="Click to star/unstar"):
+                                if is_starred:
+                                    st.session_state.watchlist_symbols.discard(sym)
+                                else:
+                                    st.session_state.watchlist_symbols.add(sym)
+                                st.rerun()
 
-                    h_c1, h_c2, h_c3 = st.columns([6, 3, 2])
-                    with h_c1:
-                        st.markdown(
-                            f"<a href=\"{tv_url}\" target=\"_blank\" class=\"card-symbol-link\">{sym} ↗</a> "
-                            f"<span style=\"font-size:0.75rem; color:#64748B;\">({row['Strategy']}){has_note_tag}</span>",
-                            unsafe_allow_html=True
-                        )
-                    with h_c2:
-                        st.markdown(f"<span class=\"{badge_class}\">{row['Action']}</span>", unsafe_allow_html=True)
-                    with h_c3:
-                        st.markdown("<div class=\"card-star-btn\">", unsafe_allow_html=True)
-                        if st.button(star_icon, key=f"star_inline_{sym}", help="Toggle Watchlist Bookmark"):
-                            if is_starred:
-                                st.session_state.watchlist_symbols.discard(sym)
-                            else:
-                                st.session_state.watchlist_symbols.add(sym)
-                            st.rerun()
-                        st.markdown("</div>", unsafe_allow_html=True)
-
-                    card_html = f"""
-                    <div class="signal-card" style="margin-top:-6px;">
+                        # Card statistics grid
+                        st.markdown(f"""
                         <div class="card-grid">
                             <div><span class="card-label">LTP:</span> <span class="card-val">{format_indian_currency(row['LTP'], 2, '₹')}</span></div>
                             <div><span class="card-label">Risk:</span> <span class="card-val">{row['Risk_Pct']:.2f}%</span></div>
@@ -577,9 +486,7 @@ with tab_overview:
                             <div><span class="card-label">Vol:</span> <span class="card-val">{format_indian_currency(row['Today_Volume'], 0)}</span></div>
                             <div><span class="card-label">MCap:</span> <span class="card-val">{format_indian_currency(row['Market_Cap_Cr'], 0, '₹')} Cr</span></div>
                         </div>
-                    </div>
-                    """
-                    st.markdown(card_html, unsafe_allow_html=True)
+                        """, unsafe_allow_html=True)
 
 # --- TAB 3: WATCHLIST ---
 with tab_watchlist:
@@ -637,7 +544,7 @@ with tab_notes:
     st.markdown(f"### 📝 Saved Trade Notes ({len(st.session_state.signal_notes)})")
 
     if not st.session_state.signal_notes:
-        st.info("No trade notes saved yet. Use the note launcher on the Signals Table to attach notes to setups.")
+        st.info("No trade notes saved yet. Type a note directly into the '📝 My Note' column of the Signals Table to record trade plans.")
     else:
         note_rows = []
         for sym, data in st.session_state.signal_notes.items():
