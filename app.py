@@ -13,37 +13,52 @@ st.set_page_config(
 )
 
 # ----------------------------------------------------------------------
-# 1. COMPACT UI & ZERO-HORIZONTAL-SCROLL CSS
+# 1. CLEAN UI & SAFE TOP-PADDING STYLING (NO HEADER CLIPPING)
 # ----------------------------------------------------------------------
 st.markdown("""
 <style>
+    /* Prevent Streamlit Cloud top navbar from overlapping title */
+    header[data-testid="stHeader"] {
+        background: transparent !important;
+        height: 2.2rem !important;
+        z-index: 1 !important;
+    }
+
+    /* Safe container padding clears the fixed cloud bar cleanly */
     .block-container {
-        padding-top: 1.8rem !important;
+        padding-top: 3.8rem !important;
         padding-bottom: 0.5rem !important;
-        padding-left: 1.0rem !important;
-        padding-right: 1.0rem !important;
+        padding-left: 1.2rem !important;
+        padding-right: 1.2rem !important;
         max-width: 100% !important;
     }
+
+    /* Title Styling */
     .dashboard-title {
-        font-size: 1.5rem;
+        font-size: 1.6rem;
         font-weight: 700;
-        margin-bottom: 0.2rem;
-        color: #1E293B;
+        margin-top: 0rem;
+        margin-bottom: 0.35rem;
+        color: #0F172A;
+        line-height: 1.2;
     }
+
+    /* Compact Metrics */
     div[data-testid="stMetric"] {
         padding: 0px !important;
-        margin-bottom: -0.5rem !important;
+        margin-bottom: -0.4rem !important;
     }
     div[data-testid="stMetricLabel"] > div {
         font-size: 0.78rem !important;
         color: #64748B !important;
     }
     div[data-testid="stMetricValue"] > div {
-        font-size: 1.25rem !important;
+        font-size: 1.30rem !important;
         font-weight: 700 !important;
         line-height: 1.1 !important;
     }
     
+    /* Condensed Data Tables */
     div[data-testid="stDataFrame"] div[role="grid"] {
         font-size: 0.78rem !important;
     }
@@ -53,6 +68,7 @@ st.markdown("""
         padding: 2px 4px !important;
     }
 
+    /* Overview Cards */
     .card-symbol-link {
         font-size: 0.95rem;
         font-weight: 700;
@@ -172,6 +188,7 @@ def format_indian_currency(val, decimals=2, prefix=""):
     return f"{sign}{prefix}{res}{dec_part}"
 
 def clean_date_str(val):
+    """Parses Google Sheets serial day numbers (e.g. 46262) or date strings to YYYY-MM-DD."""
     if pd.isna(val) or str(val).strip() in ["", "-", "N/A", "None"]:
         return "-"
     val_str = str(val).strip()
@@ -650,7 +667,7 @@ with tab_watchlist:
             height=450
         )
 
-# --- TAB 4: SIGNAL NOTES DIRECTORY (INLINE EDITABLE DIRECTORY) ---
+# --- TAB 4: SIGNAL NOTES DIRECTORY ---
 with tab_notes:
     st.markdown(f"### 📝 Saved Trade Notes ({len(st.session_state.signal_notes)})")
 
@@ -673,7 +690,6 @@ with tab_notes:
 
         notes_df = pd.DataFrame(note_rows)
 
-        # Interactive editor allows direct typing into note cells
         edited_notes = st.data_editor(
             notes_df,
             column_config={
@@ -691,7 +707,6 @@ with tab_notes:
             key="notes_data_editor"
         )
 
-        # Sync updates made inside Tab 4
         for _, row_item in edited_notes.iterrows():
             sym = row_item["Symbol"]
             new_text = str(row_item["Observation / Trade Plan"]).strip()
