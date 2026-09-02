@@ -13,59 +13,118 @@ st.set_page_config(
 )
 
 # ----------------------------------------------------------------------
-# 1. UI REAL ESTATE OPTIMIZATION (COMPACT PADDING & NO BLANK WHITESPACE)
+# 1. UI REAL ESTATE OPTIMIZATION (CLEAN HEADER & ULTRA-COMPACT CARDS)
 # ----------------------------------------------------------------------
 st.markdown("""
 <style>
-    /* Drastically reduce default Streamlit container padding */
+    /* Global Container Padding */
     .block-container {
-        padding-top: 1.2rem !important;
+        padding-top: 2.8rem !important;
         padding-bottom: 0.5rem !important;
-        padding-left: 1.8rem !important;
-        padding-right: 1.8rem !important;
-    }
-    
-    /* Compact Title Header */
-    h1 {
-        font-size: 1.7rem !important;
-        font-weight: 700 !important;
-        margin-top: -0.8rem !important;
-        margin-bottom: 0.4rem !important;
-        padding-bottom: 0rem !important;
+        padding-left: 1.5rem !important;
+        padding-right: 1.5rem !important;
     }
 
-    /* Compact Metric Blocks */
+    /* Fixed Clean Header Title */
+    .dashboard-title {
+        font-size: 1.6rem;
+        font-weight: 700;
+        margin-top: 0rem;
+        margin-bottom: 0.3rem;
+        color: #1E293B;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    /* Compact Top KPI Metrics */
     div[data-testid="stMetric"] {
         padding: 0px !important;
-        margin-bottom: -0.5rem !important;
+        margin-bottom: -0.4rem !important;
     }
     div[data-testid="stMetricLabel"] > div {
-        font-size: 0.82rem !important;
-        color: #6c757d !important;
+        font-size: 0.8rem !important;
+        color: #64748B !important;
     }
     div[data-testid="stMetricValue"] > div {
-        font-size: 1.45rem !important;
+        font-size: 1.35rem !important;
         font-weight: 700 !important;
-        line-height: 1.2 !important;
+        line-height: 1.1 !important;
     }
 
-    /* Compact Tabs */
+    /* Compact Tabs Bar */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 8px !important;
-        margin-top: 0.4rem !important;
-        margin-bottom: 0.4rem !important;
+        gap: 10px !important;
+        margin-top: 0.3rem !important;
+        margin-bottom: 0.3rem !important;
     }
     .stTabs [data-baseweb="tab"] {
-        padding-top: 4px !important;
-        padding-bottom: 6px !important;
-        font-size: 0.95rem !important;
+        padding-top: 3px !important;
+        padding-bottom: 5px !important;
+        font-size: 0.92rem !important;
     }
 
-    /* Compact Section Subheaders */
-    h3 {
-        font-size: 1.15rem !important;
-        margin-top: 0.2rem !important;
-        margin-bottom: 0.4rem !important;
+    /* Ultra-Compact Single-Screen Signal Card */
+    .signal-card {
+        background: #FFFFFF;
+        border: 1px solid #E2E8F0;
+        border-radius: 6px;
+        padding: 8px 10px;
+        margin-bottom: 8px;
+        font-size: 0.80rem;
+        line-height: 1.35;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+    }
+    .signal-card:hover {
+        border-color: #94A3B8;
+    }
+    .card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid #F1F5F9;
+        padding-bottom: 4px;
+        margin-bottom: 5px;
+    }
+    .card-symbol {
+        font-size: 0.96rem;
+        font-weight: 700;
+        color: #0F172A;
+        text-decoration: none;
+    }
+    .card-symbol:hover {
+        color: #2563EB;
+        text-decoration: underline;
+    }
+    .badge-ready {
+        background-color: #DCFCE7;
+        color: #15803D;
+        font-size: 0.68rem;
+        font-weight: 600;
+        padding: 2px 6px;
+        border-radius: 4px;
+    }
+    .badge-wait {
+        background-color: #FEF9C3;
+        color: #A16207;
+        font-size: 0.68rem;
+        font-weight: 600;
+        padding: 2px 6px;
+        border-radius: 4px;
+    }
+    .card-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        column-gap: 8px;
+        row-gap: 2px;
+    }
+    .card-label {
+        color: #64748B;
+        font-size: 0.74rem;
+    }
+    .card-val {
+        font-weight: 600;
+        color: #1E293B;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -155,7 +214,7 @@ def extract_tv_url(formula_str):
     return match.group(1) if match else (formula_str if formula_str.startswith("http") else "")
 
 # ----------------------------------------------------------------------
-# 3. DATA INGESTION (Streamlit Cloud Secrets)
+# 3. DATA INGESTION ENGINE
 # ----------------------------------------------------------------------
 @st.cache_data(ttl=15)
 def load_sheet_data():
@@ -236,7 +295,7 @@ def load_sheet_data():
 df_raw = load_sheet_data()
 
 # ----------------------------------------------------------------------
-# 4. SIDEBAR: DATE, FLAT STRATEGY CHECKBOXES, RISK & 52WH SLIDERS
+# 4. SIDEBAR: DATE, FLAT STRATEGY CHECKBOXES, RISK & DIST 52WH SLIDERS
 # ----------------------------------------------------------------------
 st.sidebar.markdown("### 🔍 Signal Filters")
 
@@ -282,7 +341,7 @@ df_day = df_day[df_day["Strategy"].isin(selected_strats)]
 max_risk = st.sidebar.slider("Max Risk (%)", min_value=0.5, max_value=6.0, value=5.5, step=0.1)
 df_day = df_day[df_day["Risk_Pct"] <= max_risk]
 
-# Slider 2: Dist 52WH Cutoff (e.g. -25% to 0%)
+# Slider 2: Dist 52WH Cutoff
 dist_min = float(round(df_raw["Dist_52WH"].min() - 1, 0)) if not df_raw.empty else -30.0
 dist_min = min(dist_min, -30.0)
 min_dist_52wh = st.sidebar.slider(
@@ -296,9 +355,9 @@ min_dist_52wh = st.sidebar.slider(
 df_day = df_day[df_day["Dist_52WH"] >= min_dist_52wh]
 
 # ----------------------------------------------------------------------
-# 5. TOP COMPACT HEADER & SUMMARY KPI ROW
+# 5. TOP HEADER & COMPACT METRICS BAR
 # ----------------------------------------------------------------------
-st.markdown("<h1>📊 Market Signals Hub</h1>", unsafe_allow_html=True)
+st.markdown("<div class=\"dashboard-title\">📊 Market Signals Hub</div>", unsafe_allow_html=True)
 
 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
 active_setups = df_day[df_day["Action"].str.contains("Ready", case=False, na=False)]
@@ -308,13 +367,13 @@ kpi3.metric("AVWAP Bounces", len(df_day[df_day["Strategy"] == "AVWAP Bounce"]))
 kpi4.metric("Liquidity Sweeps", len(df_day[df_day["Strategy"] == "Liquidity Sweep"]))
 
 # ----------------------------------------------------------------------
-# 6. TABS (Signals, Overview, Watchlist)
+# 6. TABS (Signals Table, Overview Cards, Watchlist)
 # ----------------------------------------------------------------------
 tab_signals, tab_overview, tab_watchlist = st.tabs(["📋 Signals Table", "📌 Overview Cards", "⭐ Watchlist"])
 
-# --- TAB 1: SIGNALS (FULL DATA TABLE PRIORITIZED) ---
+# --- TAB 1: SIGNALS TABLE ---
 with tab_signals:
-    st.markdown(f"### All Signals ({len(df_day)})")
+    st.markdown(f"**All Signals ({len(df_day)})**")
 
     if df_day.empty:
         st.info(f"No signals match the filters for {selected_date_str}.")
@@ -370,48 +429,68 @@ with tab_signals:
             height=700
         )
 
-# --- TAB 2: OVERVIEW CARDS ---
+# --- TAB 2: OVERVIEW (COMPACT 4-COLUMN CARDS WITH HYPERLINKED SYMBOLS) ---
 with tab_overview:
-    st.markdown(f"### Active Ready Setups ({len(active_setups)})")
+    st.markdown(f"**Active Ready Setups ({len(active_setups)})**")
     if active_setups.empty:
         st.info(f"No active setups found matching filters for {selected_date_str}.")
     else:
-        cols_per_row = 3
+        # 4-column compact grid fits more cards per screen
+        cols_per_row = 4
         chunks = [active_setups.iloc[i:i + cols_per_row] for i in range(0, len(active_setups), cols_per_row)]
         for chunk in chunks:
             grid = st.columns(cols_per_row)
             for idx, (_, row) in enumerate(chunk.iterrows()):
                 with grid[idx]:
-                    with st.container(border=True):
-                        st.markdown(f"### {row['Symbol']}")
-                        st.caption(f"{row['Strategy']} • :green[{row['Action']}]")
-                        c1, c2 = st.columns(2)
-                        c1.markdown(f"**LTP:** {format_indian_currency(row['LTP'], 2, '₹')}")
-                        c1.markdown(f"**SL:** {format_indian_currency(row['Stop_Loss'], 2, '₹')}")
-                        c1.markdown(f"**52WH:** {format_indian_currency(row['High_52W'], 2, '₹')}")
-                        c1.markdown(f"**52WH Date:** {row['High_52W_Date']}")
-                        c1.markdown(f"**Today Vol:** {format_indian_currency(row['Today_Volume'], 0)}")
+                    badge_class = "badge-ready" if "Ready" in str(row['Action']) else "badge-wait"
+                    
+                    # Direct TradingView Hyperlink on the stock symbol
+                    if row["TradingView_URL"]:
+                        symbol_link = f"<a href=\"{row['TradingView_URL']}\" target=\"_blank\" class=\"card-symbol\">{row['Symbol']} ↗</a>"
+                    else:
+                        symbol_link = f"<span class=\"card-symbol\">{row['Symbol']}</span>"
 
-                        c2.markdown(f"**Risk:** {row['Risk_Pct']:.2f}%")
-                        c2.markdown(f"**R²:** {row['R2']:.2f} | **RSI:** {row['RSI']:.1f}")
-                        c2.markdown(f"**Dist 52WH:** {row['Dist_52WH']:.2f}%")
-                        c2.markdown(f"**MCap:** {format_indian_currency(row['Market_Cap_Cr'], 0, '₹')} Cr")
-                        c2.markdown(f"**1W Vol:** {format_indian_currency(row['Avg_1W_Volume'], 0)}")
-                        if row["TradingView_URL"]:
-                            st.link_button("TradingView ↗", row["TradingView_URL"], use_container_width=True)
+                    card_html = f"""
+                    <div class="signal-card">
+                        <div class="card-header">
+                            <div>{symbol_link} <span style="font-size:0.75rem; color:#64748B;">({row['Strategy']})</span></div>
+                            <span class="{badge_class}">{row['Action']}</span>
+                        </div>
+                        <div class="card-grid">
+                            <div><span class="card-label">LTP:</span> <span class="card-val">{format_indian_currency(row['LTP'], 2, '₹')}</span></div>
+                            <div><span class="card-label">Risk:</span> <span class="card-val">{row['Risk_Pct']:.2f}%</span></div>
+                            <div><span class="card-label">SL:</span> <span class="card-val">{format_indian_currency(row['Stop_Loss'], 2, '₹')}</span></div>
+                            <div><span class="card-label">R² / RSI:</span> <span class="card-val">{row['R2']:.2f} | {row['RSI']:.0f}</span></div>
+                            <div><span class="card-label">52WH:</span> <span class="card-val">{format_indian_currency(row['High_52W'], 1, '₹')}</span></div>
+                            <div><span class="card-label">Dist:</span> <span class="card-val">{row['Dist_52WH']:.1f}%</span></div>
+                            <div><span class="card-label">Vol:</span> <span class="card-val">{format_indian_currency(row['Today_Volume'], 0)}</span></div>
+                            <div><span class="card-label">MCap:</span> <span class="card-val">{format_indian_currency(row['Market_Cap_Cr'], 0, '₹')} Cr</span></div>
+                        </div>
+                    </div>
+                    """
+                    st.markdown(card_html, unsafe_allow_html=True)
 
 # --- TAB 3: WATCHLIST ---
 with tab_watchlist:
-    st.markdown("### Priority Trigger Watchlist")
+    st.markdown("**Priority Trigger Watchlist**")
     watchlist_df = df_day[df_day["Action"].isin(["Retested & Ready", "Ready (ORB)", "Confirm Reclaim"])]
     if watchlist_df.empty:
         st.info(f"Watchlist is clear for {selected_date_str}.")
     else:
         for _, row in watchlist_df.iterrows():
-            with st.container(border=True):
-                r1, r2, r3, r4 = st.columns([2, 3, 3, 2])
-                r1.markdown(f"**{row['Symbol']}**\n\n*{row['Strategy']}*")
-                r2.markdown(f"**LTP:** {format_indian_currency(row['LTP'], 2, '₹')} | **Risk:** {row['Risk_Pct']:.2f}%\n\n**Action:** :green[{row['Action']}]")
-                r3.markdown(f"**52WH:** {format_indian_currency(row['High_52W'], 2, '₹')} ({row['High_52W_Date']})\n\n**Dist:** {row['Dist_52WH']:.2f}%")
-                if row["TradingView_URL"]:
-                    r4.link_button("TradingView ↗", row["TradingView_URL"], use_container_width=True)
+            badge_class = "badge-ready" if "Ready" in str(row['Action']) else "badge-wait"
+            symbol_link = f"<a href=\"{row['TradingView_URL']}\" target=\"_blank\" class=\"card-symbol\">{row['Symbol']} ↗</a>" if row["TradingView_URL"] else f"<span class=\"card-symbol\">{row['Symbol']}</span>"
+
+            card_html = f"""
+            <div class="signal-card" style="margin-bottom: 6px;">
+                <div class="card-header">
+                    <div>{symbol_link} <span style="color:#64748B;">({row['Strategy']})</span></div>
+                    <span class="{badge_class}">{row['Action']}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; font-size:0.80rem;">
+                    <span><b>LTP:</b> {format_indian_currency(row['LTP'], 2, '₹')} | <b>SL:</b> {format_indian_currency(row['Stop_Loss'], 2, '₹')} (<b>Risk:</b> {row['Risk_Pct']:.2f}%)</span>
+                    <span><b>52WH:</b> {format_indian_currency(row['High_52W'], 1, '₹')} ({row['High_52W_Date']}) [<b>{row['Dist_52WH']:.1f}%</b>] | <b>MCap:</b> {format_indian_currency(row['Market_Cap_Cr'], 0, '₹')} Cr</span>
+                </div>
+            </div>
+            """
+            st.markdown(card_html, unsafe_allow_html=True)
