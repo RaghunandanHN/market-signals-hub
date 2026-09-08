@@ -293,7 +293,7 @@ if "pref_dist" not in st.session_state:
         st.session_state.pref_dist = -30.0
 
 # ----------------------------------------------------------------------
-# 4. FORMATTING & SANITIZATION HELPERS
+# 4. INDIAN NUMBERING & SANITIZATION FORMATTERS
 # ----------------------------------------------------------------------
 def to_clean_num(val):
     if pd.isna(val) or val == "" or val is None:
@@ -305,6 +305,7 @@ def to_clean_num(val):
         return 0.0
 
 def format_indian_currency(val, decimals=2, prefix=""):
+    """Formats numbers to 3:2:2 Indian numbering system."""
     if pd.isna(val) or val == "" or val is None:
         return "-"
     try:
@@ -718,66 +719,97 @@ tab_signals, tab_overview, tab_watchlist, tab_notes = st.tabs([
     f"📝 Notes ({len(st.session_state.signal_notes)})"
 ])
 
-# --- TAB 1: SIGNALS TABLE (WITH INTERNAL NUMERIC/DATETIME TRANSLATION FOR SORTING) ---
+# --- TAB 1: SIGNALS TABLE ---
 with tab_signals:
     if df_day.empty:
         st.info(f"No signals found for the period ({start_str} to {end_str}).")
     else:
-        # Build table preserving native types so clicking column headers sorts numerically/chronologically
-        table_df = pd.DataFrame(index=df_day.index)
-        table_df["Date"] = pd.to_datetime(df_day["Date"], errors="coerce")
-        table_df["Symbol"] = df_day["Symbol"].astype(str)
-        table_df["Strategy"] = df_day["Strategy"].astype(str)
-        table_df["Action"] = df_day["Action"].astype(str)
-        table_df["Hits"] = df_day["Alert_Count"].apply(to_clean_num).astype(int)
-        table_df["Time"] = df_day["Last_Seen"].astype(str)
+        # Multi-column Sort Controller directly above the table
+        s_col1, s_col2, s_col3 = st.columns([2, 2, 4])
+        with s_col1:
+            sort_by = st.selectbox(
+                "Sort Table By:",
+                options=["Turnover", "MCap", "Vol", "1W Vol", "RSI", "52WH", "52W Date", "Risk%", "Dist%"],
+                index=0
+            )
+        with s_col2:
+            sort_order = st.radio("Order:", options=["Descending", "Ascending"], horizontal=True, index=0)
 
-        table_df["LTP"] = df_day["LTP"].apply(to_clean_num)
-        table_df["SL"] = df_day["Stop_Loss"].apply(to_clean_num)
-        table_df["Risk%"] = df_day["Risk_Pct"].apply(to_clean_num)
-        table_df["52WH"] = df_day["High_52W"].apply(to_clean_num)
-        table_df["52W Date"] = pd.to_datetime(df_day["High_52W_Date"], errors="coerce")
-        table_df["Dist%"] = df_day["Dist_52WH"].apply(to_clean_num)
-        table_df["R²"] = df_day["R2"].apply(to_clean_num)
-        table_df["RSI"] = df_day["RSI"].apply(to_clean_num).astype(int)
-
-        # Raw numeric columns enable header sorting without mutating source sheets
-        table_df["Turnover"] = df_day["Turnover_Cr"].apply(to_clean_num)
-        table_df["MCap"] = df_day["Market_Cap_Cr"].apply(to_clean_num)
-        table_df["Vol"] = df_day["Today_Volume"].apply(to_clean_num).astype(int)
-        table_df["1W Vol"] = df_day["Avg_1W_Volume"].apply(to_clean_num).astype(int)
-        table_df["Chart"] = df_day["TradingView_URL"]
+        sort_col_map = {
+            "Turnover": "Turnover_Cr",
+            "MCap": "Market_Cap_Cr",
+            "Vol": "Today_Volume",
+            "1W Vol": "Avg_1W_Volume",
+            "RSI": "RSI",
+            "52WH": "High_52W",
+            "52W Date": "High_52W_Date",
+            "Risk%": "Risk_Pct",
+            "Dist%": "Dist_52WH"
+        }
         
-        table_df["📝"] = df_day["Symbol"].apply(lambda s: "📝" if s in st.session_state.signal_notes else "-")
-        table_df["⭐"] = df_day["Symbol"].apply(lambda s: s in st.session_state.watchlist_symbols)
+        # Sort raw DataFrame mathematically before formatting into Indian strings
+        active_sort_col = sort_col_map.get(sort_by, "Turnover_Cr")
+        is_asc = (sort_order == "Ascending")
+        
+        if active_sort_col == "High_52W_Date":
+            df_sorted = df_day.sort_values(by=active_sort_col, ascending=is_asc, key=lambda x: pd.to_datetime(x, errors="coerce"))
+        else:
+            df_sorted = df_day.sort_values(by=active_sort_col, ascending=is_asc)
 
-        # Normalization denominators for single-color heatmaps
-        max_turnover = max(float(table_df["Turnover"].max()) if not table_df.empty else 1.0, 1.0)
-        max_vol = max(float(table_df["Vol"].max()) if not table_df.empty else 1.0, 1.0)
-        max_1w_vol = max(float(table_df["1W Vol"].max()) if not table_df.empty else 1.0, 1.0)
+        # Build display table with explicit Indian currency formatting
+        table_df = pd.DataFrame(index=df_sorted.index)
+        table_df["Date"] = df_sorted["Date"].astype(str)
+        table_df["Symbol"] = df_sorted["Symbol"].astype(str)
+        table_df["Strategy"] = df_sorted["Strategy"].astype(str)
+        table_df["Action"] = df_sorted["Action"].astype(str)
+        table_df["Hits"] = df_sorted["Alert_Count"].astype(int)
+        table_df["Time"] = df_sorted["Last_Seen"].astype(str)
+
+        table_df["LTP"] = df_sorted["LTP"].apply(lambda v: format_indian_currency(v, 2, "₹"))
+        table_df["SL"] = df_sorted["Stop_Loss"].apply(lambda v: format_indian_currency(v, 2, "₹"))
+        table_df["Risk%"] = df_sorted["Risk_Pct"].apply(lambda v: f"{v:.1f}%")
+        table_df["52WH"] = df_sorted["High_52W"].apply(lambda v: format_indian_currency(v, 1, "₹"))
+        table_df["52W Date"] = df_sorted["High_52W_Date"].astype(str)
+        table_df["Dist%"] = df_sorted["Dist_52WH"].apply(lambda v: f"{v:.1f}%")
+        table_df["R²"] = df_sorted["R2"].apply(lambda v: f"{v:.2f}")
+        table_df["RSI"] = df_sorted["RSI"].apply(lambda v: f"{v:.0f}")
+
+        table_df["Turnover"] = df_sorted["Turnover_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 1)} Cr")
+        table_df["MCap"] = df_sorted["Market_Cap_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 0)} Cr")
+        table_df["Vol"] = df_sorted["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
+        table_df["1W Vol"] = df_sorted["Avg_1W_Volume"].apply(lambda v: format_indian_currency(v, 0))
+        table_df["Chart"] = df_sorted["TradingView_URL"]
+        
+        table_df["📝"] = df_sorted["Symbol"].apply(lambda s: "📝" if s in st.session_state.signal_notes else "-")
+        table_df["⭐"] = df_sorted["Symbol"].apply(lambda s: s in st.session_state.watchlist_symbols)
+
+        # Normalization limits for heat maps
+        max_turnover = max(float(df_sorted["Turnover_Cr"].max()) if not df_sorted.empty else 1.0, 1.0)
+        max_vol = max(float(df_sorted["Today_Volume"].max()) if not df_sorted.empty else 1.0, 1.0)
+        max_1w_vol = max(float(df_sorted["Avg_1W_Volume"].max()) if not df_sorted.empty else 1.0, 1.0)
 
         def apply_pure_table_styles(df_in):
             styles_df = pd.DataFrame("", index=df_in.index, columns=df_in.columns)
             
             for idx in df_in.index:
-                # 1. Turnover Single-Color Heatmap
-                t_val = df_in.loc[idx, "Turnover"]
+                # 1. Turnover Heatmap
+                t_val = df_sorted.loc[idx, "Turnover_Cr"]
                 r_turnover = min(max(t_val / max_turnover, 0.0), 1.0)
                 r1 = int(248 - r_turnover * (248 - 186))
                 g1 = int(250 - r_turnover * (250 - 230))
                 b1 = int(252 - r_turnover * (252 - 253))
                 styles_df.loc[idx, "Turnover"] = f"background-color: rgb({r1}, {g1}, {b1}); font-weight: 500;"
 
-                # 2. Today Volume Single-Color Heatmap
-                v_val = df_in.loc[idx, "Vol"]
+                # 2. Today Volume Heatmap
+                v_val = df_sorted.loc[idx, "Today_Volume"]
                 r_vol = min(max(v_val / max_vol, 0.0), 1.0)
                 r2 = int(248 - r_vol * (248 - 191))
                 g2 = int(250 - r_vol * (250 - 219))
                 b2 = int(252 - r_vol * (252 - 254))
                 styles_df.loc[idx, "Vol"] = f"background-color: rgb({r2}, {g2}, {b2}); font-weight: 500;"
 
-                # 3. 1W Avg Volume Single-Color Heatmap
-                w_val = df_in.loc[idx, "1W Vol"]
+                # 3. 1W Avg Volume Heatmap
+                w_val = df_sorted.loc[idx, "Avg_1W_Volume"]
                 r_wvol = min(max(w_val / max_1w_vol, 0.0), 1.0)
                 r3 = int(248 - r_wvol * (248 - 191))
                 g3 = int(250 - r_wvol * (250 - 219))
@@ -785,7 +817,7 @@ with tab_signals:
                 styles_df.loc[idx, "1W Vol"] = f"background-color: rgb({r3}, {g3}, {b3}); font-weight: 500;"
 
                 # 4. Market Cap Tier Styling
-                m_val = df_in.loc[idx, "MCap"]
+                m_val = df_sorted.loc[idx, "Market_Cap_Cr"]
                 if m_val >= 80000:
                     styles_df.loc[idx, "MCap"] = "background-color: #E0E7FF; color: #1E40AF; font-weight: 600;"
                 elif m_val >= 20000:
@@ -800,24 +832,24 @@ with tab_signals:
         edited_table = st.data_editor(
             styled_display,
             column_config={
-                "Date": st.column_config.DateColumn("Date", width=85, format="YYYY-MM-DD"),
+                "Date": st.column_config.TextColumn("Date", width=85, alignment="center"),
                 "Symbol": st.column_config.TextColumn("Symbol", width=110, alignment="center"),
                 "Strategy": st.column_config.TextColumn("Strategy", width=120, alignment="center"),
                 "Action": st.column_config.TextColumn("Action", width=130, alignment="center"),
                 "Hits": st.column_config.NumberColumn("Hits", width=50, alignment="center"),
                 "Time": st.column_config.TextColumn("Time", width=65, alignment="center"),
-                "LTP": st.column_config.NumberColumn("LTP", width=85, format="₹%.2f"),
-                "SL": st.column_config.NumberColumn("SL", width=85, format="₹%.2f"),
-                "Risk%": st.column_config.NumberColumn("Risk%", width=60, format="%.1f%%"),
-                "52WH": st.column_config.NumberColumn("52WH", width=85, format="₹%.1f"),
-                "52W Date": st.column_config.DateColumn("52W Date", width=85, format="YYYY-MM-DD"),
-                "Dist%": st.column_config.NumberColumn("Dist%", width=65, format="%.1f%%"),
-                "R²": st.column_config.NumberColumn("R²", width=50, format="%.2f"),
-                "RSI": st.column_config.NumberColumn("RSI", width=50, format="%d"),
-                "Turnover": st.column_config.NumberColumn("Turnover", width=85, format="₹%.1f Cr"),
-                "MCap": st.column_config.NumberColumn("MCap", width=95, format="₹%.0f Cr"),
-                "Vol": st.column_config.NumberColumn("Vol", width=85, format="%d"),
-                "1W Vol": st.column_config.NumberColumn("1W Vol", width=85, format="%d"),
+                "LTP": st.column_config.TextColumn("LTP", width=95, alignment="center"),
+                "SL": st.column_config.TextColumn("SL", width=95, alignment="center"),
+                "Risk%": st.column_config.TextColumn("Risk%", width=60, alignment="center"),
+                "52WH": st.column_config.TextColumn("52WH", width=95, alignment="center"),
+                "52W Date": st.column_config.TextColumn("52W Date", width=85, alignment="center"),
+                "Dist%": st.column_config.TextColumn("Dist%", width=65, alignment="center"),
+                "R²": st.column_config.TextColumn("R²", width=50, alignment="center"),
+                "RSI": st.column_config.TextColumn("RSI", width=50, alignment="center"),
+                "Turnover": st.column_config.TextColumn("Turnover", width=95, alignment="center"),
+                "MCap": st.column_config.TextColumn("MCap", width=105, alignment="center"),
+                "Vol": st.column_config.TextColumn("Vol", width=95, alignment="center"),
+                "1W Vol": st.column_config.TextColumn("1W Vol", width=95, alignment="center"),
                 "Chart": st.column_config.LinkColumn("Chart", width=65, display_text="Open ↗", alignment="center"),
                 "📝": st.column_config.TextColumn("📝", width=40, alignment="center"),
                 "⭐": st.column_config.CheckboxColumn("⭐", width=45, default=False)
@@ -847,13 +879,13 @@ with tab_signals:
 
         n_col1, n_col2 = st.columns([4, 1])
         with n_col1:
-            sym_list = sorted(list(df_day["Symbol"].unique()))
+            sym_list = sorted(list(df_sorted["Symbol"].unique()))
             chosen_sym = st.selectbox("Select Symbol to view / edit trade plan note:", options=sym_list, key="table_note_picker")
         with n_col2:
             st.write("")
             st.write("")
             if st.button("📝 Edit Note", use_container_width=True):
-                row_match = df_day[df_day["Symbol"] == chosen_sym].iloc[0]
+                row_match = df_sorted[df_sorted["Symbol"] == chosen_sym].iloc[0]
                 open_note_modal(chosen_sym, row_match["Strategy"], format_indian_currency(row_match["LTP"], 2))
 
 # --- TAB 2: OVERVIEW CARDS ---
@@ -1006,7 +1038,7 @@ with tab_notes:
             key="notes_data_editor"
         )
 
-        # Track and sync inline table edits back to Google Sheets
+        # Sync inline table edits back to Google Sheets
         for _, row_item in edited_notes.iterrows():
             sym = row_item["Symbol"]
             new_text = str(row_item["Observation / Trade Plan"]).strip()
