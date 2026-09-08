@@ -136,13 +136,134 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ----------------------------------------------------------------------
-# 2. STATE INITIALIZATION (WATCHLIST, NOTES & PERSISTENT PREFERENCES)
+# 2. GOOGLE SHEETS CLIENT & PERSISTENCE HELPER ENGINE
 # ----------------------------------------------------------------------
-if "watchlist_symbols" not in st.session_state:
-    st.session_state.watchlist_symbols = set()
+STATE_SHEET_NAME = "Watchlist_Notes"
 
-if "signal_notes" not in st.session_state:
-    st.session_state.signal_notes = {}
+@st.cache_resource
+def get_gspread_client():
+    try:
+        if "gcp_service_account" in st.secrets:
+            creds_dict = dict(st.secrets["gcp_service_account"])
+            return gspread.service_account_from_dict(creds_dict)
+        return gspread.service_account(filename="service_account.json")
+    except Exception as e:
+        st.error(f"Failed to authenticate with Google Sheets API: {e}")
+        return None
+
+def get_workbook():
+    gc = get_gspread_client()
+    if not gc:
+        return None
+    sheet_name = st.secrets.get("GOOGLE_SHEET_NAME", "Market_Signals")
+    sheet_id = st.secrets.get("GOOGLE_SHEET_ID", "")
+    try:
+        if sheet_id:
+            return gc.open_by_key(sheet_id)
+        return gc.open(sheet_name)
+    except Exception as e:
+        st.error(f"Failed to open Workbook: {e}")
+        return None
+
+def get_state_worksheet():
+    wb = get_workbook()
+    if not wb:
+        return None
+    try:
+        return wb.worksheet(STATE_SHEET_NAME)
+    except gspread.WorksheetNotFound:
+        try:
+            ws = wb.add_worksheet(title=STATE_SHEET_NAME, rows=1000, cols=10)
+            ws.append_row(["Symbol", "Watchlist", "Note", "Updated_At", "Strategy", "LTP"])
+            return ws
+        except Exception as e:
+            st.error(f"Failed to create worksheet '{STATE_SHEET_NAME}': {e}")
+            return None
+
+def sync_symbol_to_sheet(symbol, watchlist=None, note=None, updated_at=None, strategy="", ltp=""):
+    """Upserts watchlist status or notes for a symbol in the dedicated worksheet."""
+    ws = get_state_worksheet()
+    if not ws:
+        return False
+    
+    clean_sym = str(symbol).strip().upper()
+    try:
+        records = ws.get_all_records()
+        headers = ws.row_values(1)
+        if not headers:
+            headers = ["Symbol", "Watchlist", "Note", "Updated_At", "Strategy", "LTP"]
+            ws.append_row(headers)
+        
+        row_idx = None
+        current_data = {}
+        for idx, r in enumerate(records, start=2):
+            if str(r.get("Symbol", "")).strip().upper() == clean_sym:
+                row_idx = idx
+                current_data = r
+                break
+        
+        new_watchlist = bool(current_data.get("Watchlist", False)) if watchlist is None else bool(watchlist)
+        new_note = str(current_data.get("Note", "")) if note is None else str(note).strip()
+        new_time = str(current_data.get("Updated_At", "")) if updated_at is None else str(updated_at)
+        new_strat = strategy if strategy else str(current_data.get("Strategy", ""))
+        new_ltp = str(ltp) if ltp else str(current_data.get("LTP", ""))
+
+        # If both are empty/unflagged, prune row to prevent sheet bloat
+        if not new_watchlist and not new_note:
+            if row_idx:
+                ws.delete_rows(row_idx)
+            return True
+
+        row_payload = [clean_sym, new_watchlist, new_note, new_time, new_strat, new_ltp]
+        if row_idx:
+            cell_range = f"A{row_idx}:F{row_idx}"
+            ws.update(cell_range, [row_payload])
+        else:
+            ws.append_row(row_payload)
+        return True
+    except Exception as e:
+        st.error(f"Error persisting state to Google Sheet: {e}")
+        return False
+
+def load_persisted_state():
+    """Fetches saved watchlist and notes from the Google Sheet."""
+    ws = get_state_worksheet()
+    if not ws:
+        return set(), {}
+    
+    try:
+        records = ws.get_all_records()
+        watchlist_set = set()
+        notes_dict = {}
+        for r in records:
+            sym = str(r.get("Symbol", "")).strip().upper()
+            if not sym:
+                continue
+            is_wl = str(r.get("Watchlist", "")).strip().lower() in ["true", "1", "yes"]
+            if is_wl:
+                watchlist_set.add(sym)
+            
+            note_text = str(r.get("Note", "")).strip()
+            if note_text:
+                notes_dict[sym] = {
+                    "note": note_text,
+                    "updated_at": str(r.get("Updated_At", "-")),
+                    "strategy": str(r.get("Strategy", "-")),
+                    "ltp": str(r.get("LTP", "-"))
+                }
+        return watchlist_set, notes_dict
+    except Exception as e:
+        st.error(f"Error reading persisted state from Google Sheet: {e}")
+        return set(), {}
+
+# ----------------------------------------------------------------------
+# 3. INITIALIZE STATE & LOAD FROM GOOGLE SHEET
+# ----------------------------------------------------------------------
+if "state_loaded" not in st.session_state:
+    persisted_wl, persisted_notes = load_persisted_state()
+    st.session_state.watchlist_symbols = persisted_wl
+    st.session_state.signal_notes = persisted_notes
+    st.session_state.state_loaded = True
 
 q_params = st.query_params
 
@@ -172,7 +293,7 @@ if "pref_dist" not in st.session_state:
         st.session_state.pref_dist = -30.0
 
 # ----------------------------------------------------------------------
-# 3. HELPER FUNCTIONS
+# 4. FORMATTING & SANITIZATION HELPERS
 # ----------------------------------------------------------------------
 def format_indian_currency(val, decimals=2, prefix=""):
     if pd.isna(val) or val == "" or val is None:
@@ -276,7 +397,7 @@ def sanitize_tv_url(symbol, formula_str=""):
     return f"https://www.tradingview.com/chart/qQrGXVOL/?symbol=NSE:{clean_sym}&interval=D"
 
 # ----------------------------------------------------------------------
-# 4. NOTE DIALOG POPUP
+# 5. NOTE DIALOG POPUP (PERSISTED TO GOOGLE SHEET)
 # ----------------------------------------------------------------------
 @st.dialog("📝 Trade Note Editor")
 def open_note_modal(symbol, strategy, ltp):
@@ -289,37 +410,42 @@ def open_note_modal(symbol, strategy, ltp):
     c1, c2 = st.columns([3, 1])
     with c1:
         if st.button("💾 Save", use_container_width=True, type="primary"):
+            updated_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
             if new_note.strip():
                 st.session_state.signal_notes[symbol] = {
                     "note": new_note.strip(),
-                    "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "updated_at": updated_timestamp,
                     "strategy": strategy,
                     "ltp": ltp
                 }
+                sync_symbol_to_sheet(
+                    symbol=symbol,
+                    note=new_note.strip(),
+                    updated_at=updated_timestamp,
+                    strategy=strategy,
+                    ltp=ltp
+                )
             else:
                 st.session_state.signal_notes.pop(symbol, None)
+                sync_symbol_to_sheet(symbol=symbol, note="")
             st.rerun()
     with c2:
         if current_note and st.button("🗑️ Delete", use_container_width=True):
             st.session_state.signal_notes.pop(symbol, None)
+            sync_symbol_to_sheet(symbol=symbol, note="")
             st.rerun()
 
 # ----------------------------------------------------------------------
-# 5. DATA INGESTION ENGINE
+# 6. DATA INGESTION ENGINE
 # ----------------------------------------------------------------------
 @st.cache_data(ttl=15)
 def load_sheet_data():
     try:
-        if "gcp_service_account" in st.secrets:
-            creds_dict = dict(st.secrets["gcp_service_account"])
-            gc = gspread.service_account_from_dict(creds_dict)
-        else:
-            gc = gspread.service_account(filename="service_account.json")
+        wb = get_workbook()
+        if not wb:
+            return pd.DataFrame()
 
-        sheet_name = st.secrets.get("GOOGLE_SHEET_NAME", "Market_Signals")
-        sheet_id = st.secrets.get("GOOGLE_SHEET_ID", "")
-
-        sh = gc.open_by_key(sheet_id).sheet1 if sheet_id else gc.open(sheet_name).sheet1
+        sh = wb.sheet1
         records = sh.get_all_records(value_render_option="FORMULA")
 
         if not records:
@@ -378,13 +504,13 @@ def load_sheet_data():
 
         return df
     except Exception as e:
-        st.error(f"Error connecting to Google Sheet: {e}")
+        st.error(f"Error loading data from Google Sheet: {e}")
         return pd.DataFrame()
 
 df_raw = load_sheet_data()
 
 # ----------------------------------------------------------------------
-# 6. SIDEBAR: SAFE DATE RANGE & PRESET FILTERS
+# 7. SIDEBAR: SAFE DATE RANGE & PRESET FILTERS
 # ----------------------------------------------------------------------
 st.sidebar.markdown("### 🔍 Signal Filters")
 
@@ -562,7 +688,7 @@ st.query_params["risk"] = str(max_risk)
 st.query_params["dist"] = str(min_dist_52wh)
 
 # ----------------------------------------------------------------------
-# 7. TOP HEADER & KPI METRICS
+# 8. TOP HEADER & KPI METRICS
 # ----------------------------------------------------------------------
 st.markdown("<div class=\"dashboard-title\">📊 Market Signals Hub</div>", unsafe_allow_html=True)
 
@@ -574,7 +700,7 @@ kpi3.metric("AVWAP Bounces", len(df_day[df_day["Strategy"] == "AVWAP Bounce"]))
 kpi4.metric("Liquidity Sweeps", len(df_day[df_day["Strategy"] == "Liquidity Sweep"]))
 
 # ----------------------------------------------------------------------
-# 8. WORKSPACE TABS
+# 9. WORKSPACE TABS
 # ----------------------------------------------------------------------
 tab_signals, tab_overview, tab_watchlist, tab_notes = st.tabs([
     f"📋 Signals ({len(df_day)})", 
@@ -697,10 +823,21 @@ with tab_signals:
             key="signals_data_editor"
         )
 
-        updated_stars = set(edited_table[edited_table["⭐"] == True]["Symbol"])
-        unstarred_in_current_view = set(edited_table[edited_table["⭐"] == False]["Symbol"])
-        st.session_state.watchlist_symbols.update(updated_stars)
-        st.session_state.watchlist_symbols.difference_update(unstarred_in_current_view)
+        # Sync changes from signals table checkbox directly to sheet
+        current_stars = set(edited_table[edited_table["⭐"] == True]["Symbol"])
+        unstarred = set(edited_table[edited_table["⭐"] == False]["Symbol"])
+        
+        changed_to_star = current_stars - st.session_state.watchlist_symbols
+        changed_to_unstar = unstarred.intersection(st.session_state.watchlist_symbols)
+
+        if changed_to_star or changed_to_unstar:
+            for s in changed_to_star:
+                st.session_state.watchlist_symbols.add(s)
+                sync_symbol_to_sheet(s, watchlist=True)
+            for s in changed_to_unstar:
+                st.session_state.watchlist_symbols.discard(s)
+                sync_symbol_to_sheet(s, watchlist=False)
+            st.rerun()
 
         n_col1, n_col2 = st.columns([4, 1])
         with n_col1:
@@ -751,8 +888,10 @@ with tab_overview:
                             if st.button(star_icon, key=btn_key, help="Click to star/unstar"):
                                 if is_starred:
                                     st.session_state.watchlist_symbols.discard(sym)
+                                    sync_symbol_to_sheet(sym, watchlist=False)
                                 else:
                                     st.session_state.watchlist_symbols.add(sym)
+                                    sync_symbol_to_sheet(sym, watchlist=True)
                                 st.rerun()
 
                         st.markdown(f"""
@@ -781,6 +920,8 @@ with tab_watchlist:
         st.caption(f"Starred symbols: {', '.join(sorted(st.session_state.watchlist_symbols))}")
     else:
         if st.button("🗑️ Clear All Starred", key="btn_clear_wl"):
+            for s in list(st.session_state.watchlist_symbols):
+                sync_symbol_to_sheet(s, watchlist=False)
             st.session_state.watchlist_symbols.clear()
             st.rerun()
 
@@ -859,17 +1000,23 @@ with tab_notes:
             key="notes_data_editor"
         )
 
+        # Track and sync inline table edits back to Google Sheets
         for _, row_item in edited_notes.iterrows():
             sym = row_item["Symbol"]
             new_text = str(row_item["Observation / Trade Plan"]).strip()
 
             if sym in st.session_state.signal_notes:
                 if new_text and new_text != st.session_state.signal_notes[sym]["note"]:
+                    updated_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
                     st.session_state.signal_notes[sym]["note"] = new_text
-                    st.session_state.signal_notes[sym]["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    st.session_state.signal_notes[sym]["updated_at"] = updated_timestamp
+                    sync_symbol_to_sheet(sym, note=new_text, updated_at=updated_timestamp)
                 elif not new_text:
                     st.session_state.signal_notes.pop(sym, None)
+                    sync_symbol_to_sheet(sym, note="")
 
         if st.button("🗑️ Clear All Notes", key="btn_clear_all_notes"):
+            for sym in list(st.session_state.signal_notes.keys()):
+                sync_symbol_to_sheet(sym, note="")
             st.session_state.signal_notes.clear()
             st.rerun()
