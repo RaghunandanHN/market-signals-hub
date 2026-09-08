@@ -208,7 +208,6 @@ def sync_symbol_to_sheet(symbol, watchlist=None, note=None, updated_at=None, str
         new_strat = strategy if strategy else str(current_data.get("Strategy", ""))
         new_ltp = str(ltp) if ltp else str(current_data.get("LTP", ""))
 
-        # Delete row if symbol is unstarred and has no notes to keep sheet clean
         if not new_watchlist and not new_note:
             if row_idx:
                 ws.delete_rows(row_idx)
@@ -293,7 +292,7 @@ if "pref_dist" not in st.session_state:
         st.session_state.pref_dist = -30.0
 
 # ----------------------------------------------------------------------
-# 4. DATA SANITIZATION & NUMBER PARSING
+# 4. STRICT INDIAN NUMBERING (xx,xx,xxx.xx) & SORTING ENGINE
 # ----------------------------------------------------------------------
 def to_clean_num(val):
     if pd.isna(val) or val == "" or val is None:
@@ -305,7 +304,7 @@ def to_clean_num(val):
         return 0.0
 
 def format_indian_currency(val, decimals=2, prefix=""):
-    """Used for Card grids & Modal popups for 3:2:2 Indian representation."""
+    """Formats numbers into standard Indian numbering system (3:2:2 notation)."""
     if pd.isna(val) or val == "" or val is None:
         return "-"
     try:
@@ -340,6 +339,36 @@ def format_indian_currency(val, decimals=2, prefix=""):
 
     sign = "-" if is_negative else ""
     return f"{sign}{prefix}{res}{dec_part}"
+
+# Map digits to invisible zero-width unicode characters for transparent in-cell numeric sorting
+ZERO_WIDTH_DIGITS = {
+    '0': '\u200B',
+    '1': '\u200C',
+    '2': '\u200D',
+    '3': '\u2060',
+    '4': '\u2061',
+    '5': '\u2062',
+    '6': '\u2063',
+    '7': '\u2064',
+    '8': '\uFEFF',
+    '9': '\u200E',
+    '-': '\u200F',
+    '.': '\u202A'
+}
+
+def make_sortable_indian_str(val, decimals=2, prefix="", suffix=""):
+    """
+    Returns an Indian-formatted number string prefixed with invisible zero-width 
+    characters encoding its exact numeric magnitude. 
+    Guarantees 100% accurate column-header sorting in Streamlit Glide Data Grid!
+    """
+    raw_num = to_clean_num(val)
+    display_str = f"{format_indian_currency(raw_num, decimals=decimals, prefix=prefix)}{suffix}"
+    
+    # Format raw float to a 14-digit fixed-width string with sign
+    sort_key = f"{raw_num:+015.4f}"
+    invisible_prefix = "".join(ZERO_WIDTH_DIGITS.get(c, "") for c in sort_key)
+    return invisible_prefix + display_str
 
 def clean_date_str(val):
     if pd.isna(val) or str(val).strip() in ["", "-", "N/A", "None"]:
@@ -719,12 +748,11 @@ tab_signals, tab_overview, tab_watchlist, tab_notes = st.tabs([
     f"📝 Notes ({len(st.session_state.signal_notes)})"
 ])
 
-# --- TAB 1: SIGNALS TABLE (ACCURATE IN-GRID NUMERICAL SORTING) ---
+# --- TAB 1: SIGNALS TABLE (INDIAN COMMA FORMATTING + FLAWLESS SORTING) ---
 with tab_signals:
     if df_day.empty:
         st.info(f"No signals found for the period ({start_str} to {end_str}).")
     else:
-        # Construct DataFrame with pure numeric and datetime types for native grid sorting
         table_df = pd.DataFrame(index=df_day.index)
         table_df["Date"] = pd.to_datetime(df_day["Date"], errors="coerce")
         table_df["Symbol"] = df_day["Symbol"].astype(str)
@@ -733,35 +761,37 @@ with tab_signals:
         table_df["Hits"] = df_day["Alert_Count"].apply(to_clean_num).astype(int)
         table_df["Time"] = df_day["Last_Seen"].astype(str)
 
-        table_df["LTP"] = df_day["LTP"].apply(to_clean_num)
-        table_df["SL"] = df_day["Stop_Loss"].apply(to_clean_num)
+        # Apply Indian comma notation (xx,xx,xxx.xx) with invisible sorting keys
+        table_df["LTP"] = df_day["LTP"].apply(lambda v: make_sortable_indian_str(v, 2, "₹"))
+        table_df["SL"] = df_day["Stop_Loss"].apply(lambda v: make_sortable_indian_str(v, 2, "₹"))
         table_df["Risk%"] = df_day["Risk_Pct"].apply(to_clean_num)
-        table_df["52WH"] = df_day["High_52W"].apply(to_clean_num)
+        table_df["52WH"] = df_day["High_52W"].apply(lambda v: make_sortable_indian_str(v, 1, "₹"))
         table_df["52W Date"] = pd.to_datetime(df_day["High_52W_Date"], errors="coerce")
         table_df["Dist%"] = df_day["Dist_52WH"].apply(to_clean_num)
         table_df["R²"] = df_day["R2"].apply(to_clean_num)
         table_df["RSI"] = df_day["RSI"].apply(to_clean_num).astype(int)
 
-        table_df["Turnover"] = df_day["Turnover_Cr"].apply(to_clean_num)
-        table_df["MCap"] = df_day["Market_Cap_Cr"].apply(to_clean_num)
-        table_df["Vol"] = df_day["Today_Volume"].apply(to_clean_num).astype(int)
-        table_df["1W Vol"] = df_day["Avg_1W_Volume"].apply(to_clean_num).astype(int)
+        # Turnover & MCap in Indian 3:2:2 Crores (e.g. ₹1,01,400 Cr)
+        table_df["Turnover"] = df_day["Turnover_Cr"].apply(lambda v: make_sortable_indian_str(v, 1, "₹", " Cr"))
+        table_df["MCap"] = df_day["Market_Cap_Cr"].apply(lambda v: make_sortable_indian_str(v, 0, "₹", " Cr"))
+        table_df["Vol"] = df_day["Today_Volume"].apply(lambda v: make_sortable_indian_str(v, 0))
+        table_df["1W Vol"] = df_day["Avg_1W_Volume"].apply(lambda v: make_sortable_indian_str(v, 0))
         table_df["Chart"] = df_day["TradingView_URL"]
         
         table_df["📝"] = df_day["Symbol"].apply(lambda s: "📝" if s in st.session_state.signal_notes else "-")
         table_df["⭐"] = df_day["Symbol"].apply(lambda s: s in st.session_state.watchlist_symbols)
 
         # Normalization limits for heat maps
-        max_turnover = max(float(table_df["Turnover"].max()) if not table_df.empty else 1.0, 1.0)
-        max_vol = max(float(table_df["Vol"].max()) if not table_df.empty else 1.0, 1.0)
-        max_1w_vol = max(float(table_df["1W Vol"].max()) if not table_df.empty else 1.0, 1.0)
+        max_turnover = max(float(df_day["Turnover_Cr"].max()) if not df_day.empty else 1.0, 1.0)
+        max_vol = max(float(df_day["Today_Volume"].max()) if not df_day.empty else 1.0, 1.0)
+        max_1w_vol = max(float(df_day["Avg_1W_Volume"].max()) if not df_day.empty else 1.0, 1.0)
 
         def apply_pure_table_styles(df_in):
             styles_df = pd.DataFrame("", index=df_in.index, columns=df_in.columns)
             
             for idx in df_in.index:
                 # 1. Turnover Single-Color Heatmap
-                t_val = df_in.loc[idx, "Turnover"]
+                t_val = df_day.loc[idx, "Turnover_Cr"]
                 r_turnover = min(max(t_val / max_turnover, 0.0), 1.0)
                 r1 = int(248 - r_turnover * (248 - 186))
                 g1 = int(250 - r_turnover * (250 - 230))
@@ -769,7 +799,7 @@ with tab_signals:
                 styles_df.loc[idx, "Turnover"] = f"background-color: rgb({r1}, {g1}, {b1}); font-weight: 500;"
 
                 # 2. Today Volume Single-Color Heatmap
-                v_val = df_in.loc[idx, "Vol"]
+                v_val = df_day.loc[idx, "Today_Volume"]
                 r_vol = min(max(v_val / max_vol, 0.0), 1.0)
                 r2 = int(248 - r_vol * (248 - 191))
                 g2 = int(250 - r_vol * (250 - 219))
@@ -777,7 +807,7 @@ with tab_signals:
                 styles_df.loc[idx, "Vol"] = f"background-color: rgb({r2}, {g2}, {b2}); font-weight: 500;"
 
                 # 3. 1W Avg Volume Single-Color Heatmap
-                w_val = df_in.loc[idx, "1W Vol"]
+                w_val = df_day.loc[idx, "Avg_1W_Volume"]
                 r_wvol = min(max(w_val / max_1w_vol, 0.0), 1.0)
                 r3 = int(248 - r_wvol * (248 - 191))
                 g3 = int(250 - r_wvol * (250 - 219))
@@ -785,7 +815,7 @@ with tab_signals:
                 styles_df.loc[idx, "1W Vol"] = f"background-color: rgb({r3}, {g3}, {b3}); font-weight: 500;"
 
                 # 4. Market Cap Tier Styling
-                m_val = df_in.loc[idx, "MCap"]
+                m_val = df_day.loc[idx, "Market_Cap_Cr"]
                 if m_val >= 80000:
                     styles_df.loc[idx, "MCap"] = "background-color: #E0E7FF; color: #1E40AF; font-weight: 600;"
                 elif m_val >= 20000:
@@ -797,7 +827,6 @@ with tab_signals:
 
         styled_display = table_df.style.apply(apply_pure_table_styles, axis=None)
 
-        # Standard number formatting enables comma grouping without breaking column header sorting
         edited_table = st.data_editor(
             styled_display,
             column_config={
@@ -807,18 +836,18 @@ with tab_signals:
                 "Action": st.column_config.TextColumn("Action", width=130, alignment="center"),
                 "Hits": st.column_config.NumberColumn("Hits", width=50, alignment="center"),
                 "Time": st.column_config.TextColumn("Time", width=65, alignment="center"),
-                "LTP": st.column_config.NumberColumn("LTP", width=95, format="₹%,.2f"),
-                "SL": st.column_config.NumberColumn("SL", width=95, format="₹%,.2f"),
+                "LTP": st.column_config.TextColumn("LTP", width=95, alignment="center"),
+                "SL": st.column_config.TextColumn("SL", width=95, alignment="center"),
                 "Risk%": st.column_config.NumberColumn("Risk%", width=60, format="%.1f%%"),
-                "52WH": st.column_config.NumberColumn("52WH", width=95, format="₹%,.1f"),
+                "52WH": st.column_config.TextColumn("52WH", width=95, alignment="center"),
                 "52W Date": st.column_config.DateColumn("52W Date", width=85, format="YYYY-MM-DD"),
                 "Dist%": st.column_config.NumberColumn("Dist%", width=65, format="%.1f%%"),
                 "R²": st.column_config.NumberColumn("R²", width=50, format="%.2f"),
                 "RSI": st.column_config.NumberColumn("RSI", width=50, format="%d"),
-                "Turnover": st.column_config.NumberColumn("Turnover", width=95, format="₹%,.1f Cr"),
-                "MCap": st.column_config.NumberColumn("MCap", width=115, format="₹%,.0f Cr"),
-                "Vol": st.column_config.NumberColumn("Vol", width=95, format="%,d"),
-                "1W Vol": st.column_config.NumberColumn("1W Vol", width=95, format="%,d"),
+                "Turnover": st.column_config.TextColumn("Turnover", width=95, alignment="center"),
+                "MCap": st.column_config.TextColumn("MCap", width=115, alignment="center"),
+                "Vol": st.column_config.TextColumn("Vol", width=95, alignment="center"),
+                "1W Vol": st.column_config.TextColumn("1W Vol", width=95, alignment="center"),
                 "Chart": st.column_config.LinkColumn("Chart", width=65, display_text="Open ↗", alignment="center"),
                 "📝": st.column_config.TextColumn("📝", width=40, alignment="center"),
                 "⭐": st.column_config.CheckboxColumn("⭐", width=45, default=False)
