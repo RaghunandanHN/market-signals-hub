@@ -208,7 +208,7 @@ def sync_symbol_to_sheet(symbol, watchlist=None, note=None, updated_at=None, str
         new_strat = strategy if strategy else str(current_data.get("Strategy", ""))
         new_ltp = str(ltp) if ltp else str(current_data.get("LTP", ""))
 
-        # If both are empty/unflagged, prune row to prevent sheet bloat
+        # If both are empty/unflagged, delete row to prevent sheet clutter
         if not new_watchlist and not new_note:
             if row_idx:
                 ws.delete_rows(row_idx)
@@ -295,6 +295,15 @@ if "pref_dist" not in st.session_state:
 # ----------------------------------------------------------------------
 # 4. FORMATTING & SANITIZATION HELPERS
 # ----------------------------------------------------------------------
+def to_clean_num(val):
+    if pd.isna(val) or val == "" or val is None:
+        return 0.0
+    val_s = str(val).replace("₹", "").replace(",", "").replace("Cr", "").replace("%", "").strip()
+    try:
+        return float(val_s)
+    except ValueError:
+        return 0.0
+
 def format_indian_currency(val, decimals=2, prefix=""):
     if pd.isna(val) or val == "" or val is None:
         return "-"
@@ -709,53 +718,50 @@ tab_signals, tab_overview, tab_watchlist, tab_notes = st.tabs([
     f"📝 Notes ({len(st.session_state.signal_notes)})"
 ])
 
-# --- TAB 1: SIGNALS TABLE ---
+# --- TAB 1: SIGNALS TABLE (WITH INTERNAL NUMERIC/DATETIME TRANSLATION FOR SORTING) ---
 with tab_signals:
     if df_day.empty:
         st.info(f"No signals found for the period ({start_str} to {end_str}).")
     else:
+        # Build table preserving native types so clicking column headers sorts numerically/chronologically
         table_df = pd.DataFrame(index=df_day.index)
-        table_df["Date"] = df_day["Date"].astype(str)
+        table_df["Date"] = pd.to_datetime(df_day["Date"], errors="coerce")
         table_df["Symbol"] = df_day["Symbol"].astype(str)
         table_df["Strategy"] = df_day["Strategy"].astype(str)
         table_df["Action"] = df_day["Action"].astype(str)
-        table_df["Hits"] = df_day["Alert_Count"].astype(int)
+        table_df["Hits"] = df_day["Alert_Count"].apply(to_clean_num).astype(int)
         table_df["Time"] = df_day["Last_Seen"].astype(str)
 
-        table_df["LTP"] = df_day["LTP"].apply(lambda v: format_indian_currency(v, 2, "₹"))
-        table_df["SL"] = df_day["Stop_Loss"].apply(lambda v: format_indian_currency(v, 2, "₹"))
-        table_df["Risk%"] = df_day["Risk_Pct"].apply(lambda v: f"{v:.1f}%")
-        table_df["52WH"] = df_day["High_52W"].apply(lambda v: format_indian_currency(v, 1, "₹"))
-        table_df["52W Date"] = df_day["High_52W_Date"].astype(str)
-        table_df["Dist%"] = df_day["Dist_52WH"].apply(lambda v: f"{v:.1f}%")
-        table_df["R²"] = df_day["R2"].apply(lambda v: f"{v:.2f}")
-        table_df["RSI"] = df_day["RSI"].apply(lambda v: f"{v:.0f}")
+        table_df["LTP"] = df_day["LTP"].apply(to_clean_num)
+        table_df["SL"] = df_day["Stop_Loss"].apply(to_clean_num)
+        table_df["Risk%"] = df_day["Risk_Pct"].apply(to_clean_num)
+        table_df["52WH"] = df_day["High_52W"].apply(to_clean_num)
+        table_df["52W Date"] = pd.to_datetime(df_day["High_52W_Date"], errors="coerce")
+        table_df["Dist%"] = df_day["Dist_52WH"].apply(to_clean_num)
+        table_df["R²"] = df_day["R2"].apply(to_clean_num)
+        table_df["RSI"] = df_day["RSI"].apply(to_clean_num).astype(int)
 
-        table_df["Turnover"] = df_day["Turnover_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 1)}Cr")
-        table_df["MCap"] = df_day["Market_Cap_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 0)}Cr")
-        table_df["Vol"] = df_day["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
-        table_df["1W Vol"] = df_day["Avg_1W_Volume"].apply(lambda v: format_indian_currency(v, 0))
+        # Raw numeric columns enable header sorting without mutating source sheets
+        table_df["Turnover"] = df_day["Turnover_Cr"].apply(to_clean_num)
+        table_df["MCap"] = df_day["Market_Cap_Cr"].apply(to_clean_num)
+        table_df["Vol"] = df_day["Today_Volume"].apply(to_clean_num).astype(int)
+        table_df["1W Vol"] = df_day["Avg_1W_Volume"].apply(to_clean_num).astype(int)
         table_df["Chart"] = df_day["TradingView_URL"]
         
         table_df["📝"] = df_day["Symbol"].apply(lambda s: "📝" if s in st.session_state.signal_notes else "-")
         table_df["⭐"] = df_day["Symbol"].apply(lambda s: s in st.session_state.watchlist_symbols)
 
-        # Mathematical normalization limits for heat maps
-        max_turnover = float(df_day["Turnover_Cr"].max()) if not df_day.empty else 1.0
-        max_turnover = max(max_turnover, 1.0)
-
-        max_vol = float(df_day["Today_Volume"].max()) if not df_day.empty else 1.0
-        max_vol = max(max_vol, 1.0)
-
-        max_1w_vol = float(df_day["Avg_1W_Volume"].max()) if not df_day.empty else 1.0
-        max_1w_vol = max(max_1w_vol, 1.0)
+        # Normalization denominators for single-color heatmaps
+        max_turnover = max(float(table_df["Turnover"].max()) if not table_df.empty else 1.0, 1.0)
+        max_vol = max(float(table_df["Vol"].max()) if not table_df.empty else 1.0, 1.0)
+        max_1w_vol = max(float(table_df["1W Vol"].max()) if not table_df.empty else 1.0, 1.0)
 
         def apply_pure_table_styles(df_in):
             styles_df = pd.DataFrame("", index=df_in.index, columns=df_in.columns)
             
             for idx in df_in.index:
                 # 1. Turnover Single-Color Heatmap
-                t_val = df_day.loc[idx, "Turnover_Cr"]
+                t_val = df_in.loc[idx, "Turnover"]
                 r_turnover = min(max(t_val / max_turnover, 0.0), 1.0)
                 r1 = int(248 - r_turnover * (248 - 186))
                 g1 = int(250 - r_turnover * (250 - 230))
@@ -763,7 +769,7 @@ with tab_signals:
                 styles_df.loc[idx, "Turnover"] = f"background-color: rgb({r1}, {g1}, {b1}); font-weight: 500;"
 
                 # 2. Today Volume Single-Color Heatmap
-                v_val = df_day.loc[idx, "Today_Volume"]
+                v_val = df_in.loc[idx, "Vol"]
                 r_vol = min(max(v_val / max_vol, 0.0), 1.0)
                 r2 = int(248 - r_vol * (248 - 191))
                 g2 = int(250 - r_vol * (250 - 219))
@@ -771,15 +777,15 @@ with tab_signals:
                 styles_df.loc[idx, "Vol"] = f"background-color: rgb({r2}, {g2}, {b2}); font-weight: 500;"
 
                 # 3. 1W Avg Volume Single-Color Heatmap
-                w_val = df_day.loc[idx, "Avg_1W_Volume"]
+                w_val = df_in.loc[idx, "1W Vol"]
                 r_wvol = min(max(w_val / max_1w_vol, 0.0), 1.0)
                 r3 = int(248 - r_wvol * (248 - 191))
                 g3 = int(250 - r_wvol * (250 - 219))
                 b3 = int(252 - r_wvol * (252 - 254))
                 styles_df.loc[idx, "1W Vol"] = f"background-color: rgb({r3}, {g3}, {b3}); font-weight: 500;"
 
-                # 4. Market Cap: Non-intrusive palette
-                m_val = df_day.loc[idx, "Market_Cap_Cr"]
+                # 4. Market Cap Tier Styling
+                m_val = df_in.loc[idx, "MCap"]
                 if m_val >= 80000:
                     styles_df.loc[idx, "MCap"] = "background-color: #E0E7FF; color: #1E40AF; font-weight: 600;"
                 elif m_val >= 20000:
@@ -794,24 +800,24 @@ with tab_signals:
         edited_table = st.data_editor(
             styled_display,
             column_config={
-                "Date": st.column_config.TextColumn("Date", width=85, alignment="center"),
+                "Date": st.column_config.DateColumn("Date", width=85, format="YYYY-MM-DD"),
                 "Symbol": st.column_config.TextColumn("Symbol", width=110, alignment="center"),
                 "Strategy": st.column_config.TextColumn("Strategy", width=120, alignment="center"),
                 "Action": st.column_config.TextColumn("Action", width=130, alignment="center"),
                 "Hits": st.column_config.NumberColumn("Hits", width=50, alignment="center"),
                 "Time": st.column_config.TextColumn("Time", width=65, alignment="center"),
-                "LTP": st.column_config.TextColumn("LTP", width=85, alignment="center"),
-                "SL": st.column_config.TextColumn("SL", width=85, alignment="center"),
-                "Risk%": st.column_config.TextColumn("Risk%", width=60, alignment="center"),
-                "52WH": st.column_config.TextColumn("52WH", width=85, alignment="center"),
-                "52W Date": st.column_config.TextColumn("52W Date", width=85, alignment="center"),
-                "Dist%": st.column_config.TextColumn("Dist%", width=65, alignment="center"),
-                "R²": st.column_config.TextColumn("R²", width=50, alignment="center"),
-                "RSI": st.column_config.TextColumn("RSI", width=50, alignment="center"),
-                "Turnover": st.column_config.TextColumn("Turnover", width=75, alignment="center"),
-                "MCap": st.column_config.TextColumn("MCap", width=85, alignment="center"),
-                "Vol": st.column_config.TextColumn("Vol", width=80, alignment="center"),
-                "1W Vol": st.column_config.TextColumn("1W Vol", width=80, alignment="center"),
+                "LTP": st.column_config.NumberColumn("LTP", width=85, format="₹%.2f"),
+                "SL": st.column_config.NumberColumn("SL", width=85, format="₹%.2f"),
+                "Risk%": st.column_config.NumberColumn("Risk%", width=60, format="%.1f%%"),
+                "52WH": st.column_config.NumberColumn("52WH", width=85, format="₹%.1f"),
+                "52W Date": st.column_config.DateColumn("52W Date", width=85, format="YYYY-MM-DD"),
+                "Dist%": st.column_config.NumberColumn("Dist%", width=65, format="%.1f%%"),
+                "R²": st.column_config.NumberColumn("R²", width=50, format="%.2f"),
+                "RSI": st.column_config.NumberColumn("RSI", width=50, format="%d"),
+                "Turnover": st.column_config.NumberColumn("Turnover", width=85, format="₹%.1f Cr"),
+                "MCap": st.column_config.NumberColumn("MCap", width=95, format="₹%.0f Cr"),
+                "Vol": st.column_config.NumberColumn("Vol", width=85, format="%d"),
+                "1W Vol": st.column_config.NumberColumn("1W Vol", width=85, format="%d"),
                 "Chart": st.column_config.LinkColumn("Chart", width=65, display_text="Open ↗", alignment="center"),
                 "📝": st.column_config.TextColumn("📝", width=40, alignment="center"),
                 "⭐": st.column_config.CheckboxColumn("⭐", width=45, default=False)
@@ -823,7 +829,7 @@ with tab_signals:
             key="signals_data_editor"
         )
 
-        # Sync changes from signals table checkbox directly to sheet
+        # Sync changes from table checkboxes directly to dedicated Google Sheet tab
         current_stars = set(edited_table[edited_table["⭐"] == True]["Symbol"])
         unstarred = set(edited_table[edited_table["⭐"] == False]["Symbol"])
         
