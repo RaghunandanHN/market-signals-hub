@@ -1,1040 +1,603 @@
+import json
 import os
-import re
-from datetime import datetime, date, timedelta
-import gspread
 import pandas as pd
 import streamlit as st
+import gspread
 
 st.set_page_config(
     page_title="Market Signals Hub",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# ----------------------------------------------------------------------
-# 1. CLEAN UI, COMPACT VIEWPORT & CLOUD CHROME SUPPRESSION CSS
-# ----------------------------------------------------------------------
-st.markdown("""
-<style>
-    header[data-testid="stHeader"] {
-        background: transparent !important;
-        height: 2.2rem !important;
-        z-index: 1 !important;
-    }
-
-    [data-testid="manage-app-button"],
-    div[class*="viewerBadge"],
-    div[class*="manageApp"],
-    .stAppDeployButton,
-    button[title="Manage app"] {
-        display: none !important;
-        visibility: hidden !important;
-        opacity: 0 !important;
-        pointer-events: none !important;
-    }
-
-    .block-container {
-        padding-top: 3.8rem !important;
-        padding-bottom: 0.5rem !important;
+# Tight layout CSS to minimize white space while keeping top header & title clear
+st.markdown(
+    """
+    <style>
+      .block-container {
+        padding-top: 2.25rem !important;
+        padding-bottom: 0.55rem !important;
         padding-left: 1.0rem !important;
         padding-right: 1.0rem !important;
         max-width: 100% !important;
-    }
+      }
+      div[data-testid="stVerticalBlock"] > div {
+        gap: 0.35rem !important;
+      }
+      div[data-testid="stMetric"] {
+        padding: 0.1rem 0.25rem !important;
+      }
+      div[data-testid="stMetricValue"] {
+        font-size: 1.55rem !important;
+        line-height: 1.15 !important;
+      }
+      div[data-testid="stMetricLabel"] {
+        font-size: 0.8rem !important;
+      }
+      section[data-testid="stSidebar"] .block-container {
+        padding-top: 1.5rem !important;
+        padding-bottom: 0.65rem !important;
+        padding-left: 0.85rem !important;
+        padding-right: 0.85rem !important;
+      }
+      section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] > div {
+        gap: 0.2rem !important;
+      }
+      section[data-testid="stSidebar"] .stCheckbox {
+        margin-bottom: -0.35rem !important;
+      }
+      h2 {
+        margin-top: 0.15rem !important;
+        margin-bottom: 0.15rem !important;
+        padding-top: 0.2rem !important;
+        font-size: 1.45rem !important;
+      }
+      h3 {
+        margin-top: 0.25rem !important;
+        margin-bottom: 0.1rem !important;
+        font-size: 0.95rem !important;
+      }
+      .stTabs [data-baseweb="tab-list"] {
+        gap: 0.6rem !important;
+        margin-bottom: 0.1rem !important;
+      }
+      .stTabs [data-baseweb="tab"] {
+        padding-top: 0.25rem !important;
+        padding-bottom: 0.25rem !important;
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-    .dashboard-title {
-        font-size: 1.6rem;
-        font-weight: 700;
-        margin-top: 0rem;
-        margin-bottom: 0.35rem;
-        color: #0F172A;
-        line-height: 1.2;
-    }
+CSV_FILE = "signals_log.csv"
+WATCHLIST_FILE = "watchlist_store.json"
+NOTES_FILE = "notes_store.json"
+GOOGLE_SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "Market_Signals")
+GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "")
+SERVICE_ACCOUNT_FILE = os.getenv("SERVICE_ACCOUNT_FILE", "service_account.json")
+TRADINGVIEW_LAYOUT_ID = os.getenv("TRADINGVIEW_LAYOUT_ID", "qQrGXVOL")
 
-    div[data-testid="stMetric"] {
-        padding: 0px !important;
-        margin-bottom: -0.4rem !important;
-    }
-    div[data-testid="stMetricLabel"] > div {
-        font-size: 0.78rem !important;
-        color: #64748B !important;
-    }
-    div[data-testid="stMetricValue"] > div {
-        font-size: 1.30rem !important;
-        font-weight: 700 !important;
-        line-height: 1.1 !important;
-    }
-    
-    div[data-testid="stDataFrame"] div[role="grid"] {
-        font-size: 0.78rem !important;
-    }
-    div[data-testid="stDataFrame"] div[role="columnheader"] {
-        font-size: 0.76rem !important;
-        font-weight: 700 !important;
-        padding: 2px 4px !important;
-    }
-
-    div[data-testid="stDataFrame"] {
-        --gdg-accent-color: #3B82F6 !important;
-        --gdg-bg-cell-selected: #E0E7FF !important;
-        --gdg-bg-cell-hovered: #F1F5F9 !important;
-    }
-
-    .card-symbol-link {
-        font-size: 0.95rem;
-        font-weight: 700;
-        color: #1D4ED8 !important;
-        text-decoration: none !important;
-    }
-    .card-symbol-link:hover {
-        text-decoration: underline !important;
-        color: #1E40AF !important;
-    }
-    .badge-ready {
-        background-color: #DCFCE7;
-        color: #15803D;
-        font-size: 0.68rem;
-        font-weight: 600;
-        padding: 1px 5px;
-        border-radius: 4px;
-        display: inline-block;
-    }
-    .badge-wait {
-        background-color: #FEF9C3;
-        color: #A16207;
-        font-size: 0.68rem;
-        font-weight: 600;
-        padding: 1px 5px;
-        border-radius: 4px;
-        display: inline-block;
-    }
-    .card-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        column-gap: 6px;
-        row-gap: 2px;
-        font-size: 0.78rem;
-        margin-top: 4px;
-    }
-    .card-label {
-        color: #64748B;
-        font-size: 0.72rem;
-    }
-    .card-val {
-        font-weight: 600;
-        color: #1E293B;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# ----------------------------------------------------------------------
-# 2. GOOGLE SHEETS CLIENT & PERSISTENCE HELPER ENGINE
-# ----------------------------------------------------------------------
-STATE_SHEET_NAME = "Watchlist_Notes"
-
-@st.cache_resource
-def get_gspread_client():
-    try:
-        if "gcp_service_account" in st.secrets:
-            creds_dict = dict(st.secrets["gcp_service_account"])
-            return gspread.service_account_from_dict(creds_dict)
-        return gspread.service_account(filename="service_account.json")
-    except Exception as e:
-        st.error(f"Failed to authenticate with Google Sheets API: {e}")
-        return None
-
-def get_workbook():
-    gc = get_gspread_client()
-    if not gc:
-        return None
-    sheet_name = st.secrets.get("GOOGLE_SHEET_NAME", "Market_Signals")
-    sheet_id = st.secrets.get("GOOGLE_SHEET_ID", "")
-    try:
-        if sheet_id:
-            return gc.open_by_key(sheet_id)
-        return gc.open(sheet_name)
-    except Exception as e:
-        st.error(f"Failed to open Workbook: {e}")
-        return None
-
-def get_state_worksheet():
-    wb = get_workbook()
-    if not wb:
-        return None
-    try:
-        return wb.worksheet(STATE_SHEET_NAME)
-    except gspread.WorksheetNotFound:
-        try:
-            ws = wb.add_worksheet(title=STATE_SHEET_NAME, rows=1000, cols=10)
-            ws.append_row(["Symbol", "Watchlist", "Note", "Updated_At", "Strategy", "LTP"])
-            return ws
-        except Exception as e:
-            st.error(f"Failed to create worksheet '{STATE_SHEET_NAME}': {e}")
-            return None
-
-def sync_symbol_to_sheet(symbol, watchlist=None, note=None, updated_at=None, strategy="", ltp=""):
-    ws = get_state_worksheet()
-    if not ws:
-        return False
-    
-    clean_sym = str(symbol).strip().upper()
-    try:
-        records = ws.get_all_records()
-        headers = ws.row_values(1)
-        if not headers:
-            headers = ["Symbol", "Watchlist", "Note", "Updated_At", "Strategy", "LTP"]
-            ws.append_row(headers)
-        
-        row_idx = None
-        current_data = {}
-        for idx, r in enumerate(records, start=2):
-            if str(r.get("Symbol", "")).strip().upper() == clean_sym:
-                row_idx = idx
-                current_data = r
-                break
-        
-        new_watchlist = bool(current_data.get("Watchlist", False)) if watchlist is None else bool(watchlist)
-        new_note = str(current_data.get("Note", "")) if note is None else str(note).strip()
-        new_time = str(current_data.get("Updated_At", "")) if updated_at is None else str(updated_at)
-        new_strat = strategy if strategy else str(current_data.get("Strategy", ""))
-        new_ltp = str(ltp) if ltp else str(current_data.get("LTP", ""))
-
-        if not new_watchlist and not new_note:
-            if row_idx:
-                ws.delete_rows(row_idx)
-            return True
-
-        row_payload = [clean_sym, new_watchlist, new_note, new_time, new_strat, new_ltp]
-        if row_idx:
-            cell_range = f"A{row_idx}:F{row_idx}"
-            ws.update(cell_range, [row_payload])
-        else:
-            ws.append_row(row_payload)
-        return True
-    except Exception as e:
-        st.error(f"Error persisting state to Google Sheet: {e}")
-        return False
-
-def load_persisted_state():
-    ws = get_state_worksheet()
-    if not ws:
-        return set(), {}
-    
-    try:
-        records = ws.get_all_records()
-        watchlist_set = set()
-        notes_dict = {}
-        for r in records:
-            sym = str(r.get("Symbol", "")).strip().upper()
-            if not sym:
-                continue
-            is_wl = str(r.get("Watchlist", "")).strip().lower() in ["true", "1", "yes"]
-            if is_wl:
-                watchlist_set.add(sym)
-            
-            note_text = str(r.get("Note", "")).strip()
-            if note_text:
-                notes_dict[sym] = {
-                    "note": note_text,
-                    "updated_at": str(r.get("Updated_At", "-")),
-                    "strategy": str(r.get("Strategy", "-")),
-                    "ltp": str(r.get("LTP", "-"))
-                }
-        return watchlist_set, notes_dict
-    except Exception as e:
-        st.error(f"Error reading persisted state from Google Sheet: {e}")
-        return set(), {}
-
-# ----------------------------------------------------------------------
-# 3. INITIALIZE STATE & LOAD FROM GOOGLE SHEET
-# ----------------------------------------------------------------------
-if "state_loaded" not in st.session_state:
-    persisted_wl, persisted_notes = load_persisted_state()
-    st.session_state.watchlist_symbols = persisted_wl
-    st.session_state.signal_notes = persisted_notes
-    st.session_state.state_loaded = True
-
-q_params = st.query_params
-
-if "pref_date_mode" not in st.session_state:
-    st.session_state.pref_date_mode = q_params.get("dmode", "Latest Session")
-if "pref_start_date" not in st.session_state:
-    st.session_state.pref_start_date = q_params.get("start", None)
-if "pref_end_date" not in st.session_state:
-    st.session_state.pref_end_date = q_params.get("end", None)
-if "pref_only_watchlist" not in st.session_state:
-    st.session_state.pref_only_watchlist = q_params.get("wl", "0") == "1"
-if "pref_strats" not in st.session_state:
-    saved_strats = q_params.get("strats", None)
-    st.session_state.pref_strats = saved_strats.split(",") if saved_strats else None
-if "pref_actions" not in st.session_state:
-    saved_acts = q_params.get("acts", None)
-    st.session_state.pref_actions = saved_acts.split(",") if saved_acts else None
-if "pref_risk" not in st.session_state:
-    try:
-        st.session_state.pref_risk = float(q_params.get("risk", 5.5))
-    except ValueError:
-        st.session_state.pref_risk = 5.5
-if "pref_dist" not in st.session_state:
-    try:
-        st.session_state.pref_dist = float(q_params.get("dist", -30.0))
-    except ValueError:
-        st.session_state.pref_dist = -30.0
-
-# ----------------------------------------------------------------------
-# 4. STRICT INDIAN NUMBERING (xx,xx,xxx.xx)
-# ----------------------------------------------------------------------
-def to_clean_num(val):
-    if pd.isna(val) or val == "" or val is None:
-        return 0.0
-    val_s = str(val).replace("₹", "").replace(",", "").replace("Cr", "").replace("%", "").strip()
-    try:
-        return float(val_s)
-    except ValueError:
-        return 0.0
-
-def format_indian_currency(val, decimals=2, prefix=""):
-    """
-    Standard Indian numbering system with 3:2:2 comma grouping.
-    Example: 101400 -> 1,01,400 | 442503 -> 4,42,503 | 1148595 -> 11,48,595
-    """
-    if pd.isna(val) or val == "" or val is None:
-        return "-"
-    try:
-        val = float(val)
-    except (ValueError, TypeError):
-        return str(val)
-
-    is_negative = val < 0
-    val = abs(val)
-
-    if decimals > 0:
-        formatted_dec = f"{val:.{decimals}f}"
-        int_part, dec_part = formatted_dec.split(".")
-        dec_part = "." + dec_part
-    else:
-        int_part = str(int(round(val)))
-        dec_part = ""
-
-    if len(int_part) <= 3:
-        res = int_part
-    else:
-        last3 = int_part[-3:]
-        remaining = int_part[:-3]
-        chunks = []
-        while len(remaining) > 2:
-            chunks.append(remaining[-2:])
-            remaining = remaining[:-2]
-        if remaining:
-            chunks.append(remaining)
-        chunks.reverse()
-        res = ",".join(chunks) + "," + last3
-
-    sign = "-" if is_negative else ""
-    return f"{sign}{prefix}{res}{dec_part}"
-
-def clean_date_str(val):
-    if pd.isna(val) or str(val).strip() in ["", "-", "N/A", "None"]:
-        return "-"
-    val_str = str(val).strip()
-    
-    numeric_candidate = None
-    if val_str.isdigit():
-        numeric_candidate = int(val_str)
-    else:
-        try:
-            f = float(val_str)
-            if f.is_integer() and f > 20000:
-                numeric_candidate = int(f)
-        except ValueError:
-            pass
-
-    if numeric_candidate is not None:
-        try:
-            base_date = datetime(1899, 12, 30)
-            return (base_date + pd.Timedelta(days=numeric_candidate)).strftime("%Y-%m-%d")
-        except Exception:
-            return val_str
-
-    for fmt in ("%d-%b-%Y", "%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"):
-        try:
-            return datetime.strptime(val_str, fmt).strftime("%Y-%m-%d")
-        except ValueError:
-            pass
-
-    return val_str
-
-def format_last_seen_time(val):
-    if pd.isna(val) or val == "" or val is None:
-        return "-"
-    val_str = str(val).strip()
-    try:
-        f_val = float(val_str)
-        if 0.0 <= f_val < 1.0:
-            total_seconds = int(round(f_val * 86400))
-            hours = (total_seconds // 3600) % 24
-            minutes = (total_seconds % 3600) // 60
-            return f"{hours:02d}:{minutes:02d}"
-    except ValueError:
-        pass
-
-    try:
-        parts = val_str.split(":")
-        if len(parts) >= 2:
-            return f"{int(parts[0]):02d}:{int(parts[1]):02d}"
-    except Exception:
-        pass
-
-    return val_str
-
-def sanitize_tv_url(symbol, formula_str=""):
-    if isinstance(formula_str, str) and formula_str.strip():
-        match = re.search(r'HYPERLINK\("([^"]+)"', formula_str, re.IGNORECASE)
-        if match:
-            return match.group(1)
-        if formula_str.startswith("http"):
-            return formula_str
-
-    clean_sym = str(symbol).replace(".NS", "").replace("&", "_").replace("-", "_").strip().upper()
-    return f"https://www.tradingview.com/chart/qQrGXVOL/?symbol=NSE:{clean_sym}&interval=D"
-
-# ----------------------------------------------------------------------
-# 5. NOTE DIALOG POPUP (PERSISTED TO GOOGLE SHEET)
-# ----------------------------------------------------------------------
-@st.dialog("📝 Trade Note Editor")
-def open_note_modal(symbol, strategy, ltp):
-    current_entry = st.session_state.signal_notes.get(symbol, {})
-    current_note = current_entry.get("note", "")
-
-    st.markdown(f"**Stock:** `{symbol}` | **Strategy:** `{strategy}` | **LTP:** `₹{ltp}`")
-    new_note = st.text_area("Note / Plan:", value=current_note, height=120, placeholder="Observations, stop trail rules, or key levels...")
-
-    c1, c2 = st.columns([3, 1])
-    with c1:
-        if st.button("💾 Save", use_container_width=True, type="primary"):
-            updated_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-            if new_note.strip():
-                st.session_state.signal_notes[symbol] = {
-                    "note": new_note.strip(),
-                    "updated_at": updated_timestamp,
-                    "strategy": strategy,
-                    "ltp": ltp
-                }
-                sync_symbol_to_sheet(
-                    symbol=symbol,
-                    note=new_note.strip(),
-                    updated_at=updated_timestamp,
-                    strategy=strategy,
-                    ltp=ltp
-                )
-            else:
-                st.session_state.signal_notes.pop(symbol, None)
-                sync_symbol_to_sheet(symbol=symbol, note="")
-            st.rerun()
-    with c2:
-        if current_note and st.button("🗑️ Delete", use_container_width=True):
-            st.session_state.signal_notes.pop(symbol, None)
-            sync_symbol_to_sheet(symbol=symbol, note="")
-            st.rerun()
-
-# ----------------------------------------------------------------------
-# 6. DATA INGESTION ENGINE
-# ----------------------------------------------------------------------
-@st.cache_data(ttl=15)
-def load_sheet_data():
-    try:
-        wb = get_workbook()
-        if not wb:
-            return pd.DataFrame()
-
-        sh = wb.sheet1
-        records = sh.get_all_records(value_render_option="FORMULA")
-
-        if not records:
-            return pd.DataFrame()
-
-        df = pd.DataFrame(records)
-
-        col_map = {
-            "TradingView Chart": "TradingView_URL",
-            "LTP (₹)": "LTP",
-            "Stop Loss (₹)": "Stop_Loss",
-            "Risk (%)": "Risk_Pct",
-            "52W High (₹)": "High_52W",
-            "Dist 52WH (%)": "Dist_52WH",
-            "R²": "R2",
-            "Daily RSI": "RSI",
-            "Turnover (₹Cr)": "Turnover_Cr",
-            "Market Cap (₹Cr)": "Market_Cap_Cr",
-            "Today's Volume": "Today_Volume",
-            "1W Avg Volume": "Avg_1W_Volume",
-            "Alert Count": "Alert_Count",
-            "Last Seen": "Last_Seen",
-            "52W High Date": "High_52W_Date"
-        }
-        df.rename(columns=col_map, inplace=True)
-
-        if "Date" in df.columns:
-            df["Date"] = df["Date"].apply(clean_date_str)
-        else:
-            df["Date"] = datetime.now().strftime("%Y-%m-%d")
-
-        if "Last_Seen" in df.columns:
-            df["Last_Seen"] = df["Last_Seen"].apply(format_last_seen_time)
-        else:
-            df["Last_Seen"] = "-"
-
-        if "High_52W_Date" in df.columns:
-            df["High_52W_Date"] = df["High_52W_Date"].apply(clean_date_str)
-        else:
-            df["High_52W_Date"] = "-"
-
-        raw_urls = df["TradingView_URL"] if "TradingView_URL" in df.columns else [""] * len(df)
-        df["TradingView_URL"] = [sanitize_tv_url(s, u) for s, u in zip(df["Symbol"], raw_urls)]
-
-        numeric_cols = [
-            "LTP", "Stop_Loss", "Risk_Pct", "High_52W", "Dist_52WH", 
-            "R2", "RSI", "Turnover_Cr", "Market_Cap_Cr", "Today_Volume", 
-            "Avg_1W_Volume", "Alert_Count"
-        ]
-        for c in numeric_cols:
-            if c in df.columns:
-                df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
-
-        if "Alert_Count" not in df.columns:
-            df["Alert_Count"] = 1
-
-        return df
-    except Exception as e:
-        st.error(f"Error loading data from Google Sheet: {e}")
-        return pd.DataFrame()
-
-df_raw = load_sheet_data()
-
-# ----------------------------------------------------------------------
-# 7. SIDEBAR: SAFE DATE RANGE & PRESET FILTERS
-# ----------------------------------------------------------------------
-st.sidebar.markdown("### 🔍 Signal Filters")
-
-if df_raw.empty:
-    st.warning("No data found in Google Sheet. Run your scan script first.")
-    st.stop()
-
-available_dates = []
-for d_str in df_raw["Date"].dropna().unique():
-    try:
-        available_dates.append(datetime.strptime(str(d_str), "%Y-%m-%d").date())
-    except ValueError:
-        pass
-
-latest_sheet_date = max(available_dates) if available_dates else date.today()
-min_sheet_date = min(available_dates) if available_dates else date(2020, 1, 1)
-
-today_ref = date.today()
-calendar_max_limit = max(latest_sheet_date, today_ref) + timedelta(days=30)
-calendar_min_limit = min(min_sheet_date, date(2020, 1, 1))
-
-preset_options = [
-    "Latest Session",
-    "Today",
-    "This Week",
-    "Last Week",
-    "Last 30 Days",
-    "All Available Dates",
-    "Custom Range"
+ALL_STRATEGIES = [
+    "AVWAP Bounce",
+    "EMA20 Pullback",
+    "Liquidity Sweep",
+    "Swing Low",
+    "VCP Contraction",
+    "VDU 50-DMA Coil",
+    "VDU Absorption Coil",
+    "VDU Pre-Breakout",
 ]
 
-default_mode_idx = preset_options.index(st.session_state.pref_date_mode) if st.session_state.pref_date_mode in preset_options else 0
-selected_date_mode = st.sidebar.selectbox("Date Period", options=preset_options, index=default_mode_idx)
-st.session_state.pref_date_mode = selected_date_mode
+BASE_TABLE_COLUMNS = [
+    "Date",
+    "Symbol",
+    "Strategy",
+    "Action",
+    "Hits",
+    "Time",
+    "LTP",
+    "SL",
+    "Risk_Pct",
+    "52WH",
+    "52W_Date",
+    "Dist_Pct",
+    "R2",
+    "RSI",
+    "Turnover",
+    "MCap",
+    "Vol",
+    "1W_Vol",
+    "Chart",
+]
 
-if selected_date_mode == "Latest Session":
-    filter_start = latest_sheet_date
-    filter_end = latest_sheet_date
-elif selected_date_mode == "Today":
-    filter_start = today_ref
-    filter_end = today_ref
-elif selected_date_mode == "This Week":
-    filter_start = today_ref - timedelta(days=today_ref.weekday())
-    filter_end = filter_start + timedelta(days=4)
-elif selected_date_mode == "Last Week":
-    filter_start = today_ref - timedelta(days=today_ref.weekday() + 7)
-    filter_end = filter_start + timedelta(days=4)
-elif selected_date_mode == "Last 30 Days":
-    filter_start = today_ref - timedelta(days=30)
-    filter_end = today_ref
-elif selected_date_mode == "All Available Dates":
-    filter_start = min_sheet_date
-    filter_end = latest_sheet_date
-else:  # Custom Range
-    init_custom_start = min_sheet_date
-    init_custom_end = latest_sheet_date
 
-    if st.session_state.pref_start_date:
-        try:
-            cand_s = datetime.strptime(st.session_state.pref_start_date, "%Y-%m-%d").date()
-            if calendar_min_limit <= cand_s <= calendar_max_limit:
-                init_custom_start = cand_s
-        except ValueError:
-            pass
+# -----------------------------------------------------------------------------
+# 1. PERSISTENT WATCHLIST & NOTES HELPERS
+# -----------------------------------------------------------------------------
+def load_json_store(filepath: str, default):
+  if not os.path.exists(filepath):
+    return default
+  try:
+    with open(filepath, "r", encoding="utf-8") as f:
+      return json.load(f)
+  except Exception:
+    return default
 
-    if st.session_state.pref_end_date:
-        try:
-            cand_e = datetime.strptime(st.session_state.pref_end_date, "%Y-%m-%d").date()
-            if calendar_min_limit <= cand_e <= calendar_max_limit:
-                init_custom_end = cand_e
-        except ValueError:
-            pass
 
-    if init_custom_start > init_custom_end:
-        init_custom_start, init_custom_end = init_custom_end, init_custom_start
+def save_json_store(filepath: str, payload) -> None:
+  with open(filepath, "w", encoding="utf-8") as f:
+    json.dump(payload, f, indent=2, ensure_ascii=False)
 
-    date_range_pick = st.sidebar.date_input(
-        "Select Range (Start & End)",
-        value=(init_custom_start, init_custom_end),
-        min_value=calendar_min_limit,
-        max_value=calendar_max_limit,
-        format="YYYY-MM-DD"
+
+# -----------------------------------------------------------------------------
+# 2. DATA ACCESS & NORMALIZATION
+# -----------------------------------------------------------------------------
+def _clean_num(series: pd.Series, default: float = 0.0) -> pd.Series:
+  cleaned = (
+      series.astype(str)
+      .str.replace("₹", "", regex=False)
+      .str.replace(",", "", regex=False)
+      .str.replace("%", "", regex=False)
+      .str.strip()
+  )
+  return pd.to_numeric(cleaned, errors="coerce").fillna(default)
+
+
+def _normalize_signals(raw_df: pd.DataFrame) -> pd.DataFrame:
+  if raw_df is None or raw_df.empty:
+    return pd.DataFrame(columns=BASE_TABLE_COLUMNS)
+
+  df = raw_df.copy()
+  df.columns = [str(c).strip() for c in df.columns]
+
+  rename_map = {
+      "Alert Count": "Hits",
+      "Alerts": "Hits",
+      "Last Seen": "Time",
+      "LTP (₹)": "LTP",
+      "Stop Loss (₹)": "SL",
+      "Stop_Loss": "SL",
+      "Risk (%)": "Risk_Pct",
+      "52W High (₹)": "52WH",
+      "52W High Date": "52W_Date",
+      "52W_High_Date": "52W_Date",
+      "Dist 52WH (%)": "Dist_Pct",
+      "Dist_52WH_Pct": "Dist_Pct",
+      "R²": "R2",
+      "Smoothness": "R2",
+      "Smoothness(R²)": "R2",
+      "Daily RSI": "RSI",
+      "Turnover (₹Cr)": "Turnover",
+      "Turnover_Cr": "Turnover",
+      "Market Cap (₹Cr)": "MCap",
+      "Today's Volume": "Vol",
+      "1W Avg Volume": "1W_Vol",
+  }
+  df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+
+  for col in BASE_TABLE_COLUMNS:
+    if col not in df.columns:
+      if col in {"Date", "Symbol", "Strategy", "Action", "Time", "52W_Date", "Chart"}:
+        df[col] = ""
+      else:
+        df[col] = 0.0
+
+  for txt_col in ["Date", "Symbol", "Strategy", "Action", "Time", "52W_Date"]:
+    df[txt_col] = df[txt_col].astype(str).str.strip()
+
+  df["Hits"] = _clean_num(df["Hits"], default=1).astype(int)
+  df["Vol"] = _clean_num(df["Vol"], default=0).astype(int)
+  df["1W_Vol"] = _clean_num(df["1W_Vol"], default=0).astype(int)
+
+  for num_col in ["LTP", "SL", "Risk_Pct", "52WH", "Dist_Pct", "R2", "RSI", "Turnover", "MCap"]:
+    df[num_col] = _clean_num(df[num_col], default=0.0)
+
+  df = df[df["Symbol"] != ""].copy()
+  df["Chart"] = df["Symbol"].apply(
+      lambda sym: f"https://www.tradingview.com/chart/{TRADINGVIEW_LAYOUT_ID}/?symbol=NSE:{sym}&interval=D"
+  )
+  return df
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _fetch_sheet_df(sheet_name: str, sheet_id: str, sa_file: str) -> pd.DataFrame | None:
+  if not os.path.exists(sa_file):
+    return None
+  gc = gspread.service_account(filename=sa_file)
+  sh = gc.open_by_key(sheet_id.strip()) if sheet_id and sheet_id.strip() else gc.open(sheet_name)
+  records = sh.sheet1.get_all_records()
+  if not records:
+    return pd.DataFrame(columns=BASE_TABLE_COLUMNS)
+  return _normalize_signals(pd.DataFrame(records))
+
+
+def load_signals() -> pd.DataFrame:
+  try:
+    sheet_df = _fetch_sheet_df(GOOGLE_SHEET_NAME, GOOGLE_SHEET_ID, SERVICE_ACCOUNT_FILE)
+    if sheet_df is not None:
+      return sheet_df
+  except Exception as exc:
+    st.sidebar.warning(f"Sheet read fallback: {exc}")
+
+  if os.path.exists(CSV_FILE):
+    return _normalize_signals(pd.read_csv(CSV_FILE))
+  return pd.DataFrame(columns=BASE_TABLE_COLUMNS)
+
+
+# -----------------------------------------------------------------------------
+# 2B. COLUMN COLOR CONVENTIONS (TURNOVER, MCAP, VOL, 1W VOL)
+# -----------------------------------------------------------------------------
+def style_signal_columns(df: pd.DataFrame):
+  def _style_row(row):
+    styles = pd.Series("", index=row.index)
+
+    turnover_val = float(row.get("Turnover", 0.0))
+    if "Turnover" in styles.index and turnover_val >= 400.0:
+      styles["Turnover"] = "background-color: #e0f2fe; color: #0f172a;"
+
+    mcap_val = float(row.get("MCap", 0.0))
+    if "MCap" in styles.index:
+      if mcap_val >= 100000.0:
+        styles["MCap"] = "background-color: #e0e7ff; color: #1e293b;"
+      else:
+        styles["MCap"] = "background-color: #dcfce7; color: #15803d;"
+
+    vol_val = float(row.get("Vol", 0.0))
+    w1_vol_val = float(row.get("1W_Vol", 0.0))
+    if "Vol" in styles.index and vol_val >= 5000000.0:
+      styles["Vol"] = "background-color: #eff6ff; color: #0f172a;"
+    if "1W_Vol" in styles.index and (
+        w1_vol_val >= 5000000.0 or (w1_vol_val > 0 and vol_val >= 1.5 * w1_vol_val)
+    ):
+      styles["1W_Vol"] = "background-color: #dbeafe; color: #0f172a;"
+
+    return styles
+
+  return df.style.apply(_style_row, axis=1)
+
+
+# -----------------------------------------------------------------------------
+# 3. INITIALIZE SESSION STATE FOR WATCHLIST, NOTES & NOTE EDITOR
+# -----------------------------------------------------------------------------
+if "watchlist" not in st.session_state:
+  st.session_state.watchlist = load_json_store(WATCHLIST_FILE, [])
+
+if "notes" not in st.session_state:
+  st.session_state.notes = load_json_store(NOTES_FILE, {})
+
+if "editing_note_for" not in st.session_state:
+  st.session_state.editing_note_for = None
+
+df_all = load_signals()
+
+# -----------------------------------------------------------------------------
+# 4. SIDEBAR: SIGNAL FILTERS (CHECKBOXES)
+# -----------------------------------------------------------------------------
+with st.sidebar:
+  st.markdown("## 🔍 Signal Filters")
+
+  if not df_all.empty:
+    date_period = st.selectbox(
+        "Date Period",
+        options=["Latest Session", "All Dates", "Custom Date"],
+        index=0,
+    )
+    unique_dates = sorted(df_all["Date"].replace("", pd.NA).dropna().unique(), reverse=True)
+    active_date_label = unique_dates[0] if unique_dates else ""
+
+    if date_period == "Latest Session" and unique_dates:
+      selected_dates = [unique_dates[0]]
+    elif date_period == "Custom Date" and unique_dates:
+      chosen = st.selectbox("Select Date", options=unique_dates, index=0)
+      selected_dates = [chosen]
+      active_date_label = chosen
+    else:
+      selected_dates = list(unique_dates)
+      active_date_label = "All Dates"
+
+    st.caption(f"Active Date: {active_date_label}")
+
+    watchlist_only = st.checkbox(
+        f"Show Watchlist Only ({len(st.session_state.watchlist)})",
+        value=False,
     )
 
-    if isinstance(date_range_pick, (tuple, list)):
-        if len(date_range_pick) == 2:
-            filter_start, filter_end = date_range_pick
-        elif len(date_range_pick) == 1:
-            filter_start = date_range_pick[0]
-            filter_end = date_range_pick[0]
-        else:
-            filter_start = min_sheet_date
-            filter_end = latest_sheet_date
-    else:
-        filter_start = date_range_pick
-        filter_end = date_range_pick
+    st.markdown("### Strategy Selection")
+    available_strats = list(dict.fromkeys(ALL_STRATEGIES + sorted(df_all["Strategy"].unique())))
+    selected_strategies = []
+    for strat in available_strats:
+      if st.checkbox(strat, value=True, key=f"chk_strat_{strat}"):
+        selected_strategies.append(strat)
 
-start_str = filter_start.strftime("%Y-%m-%d")
-end_str = filter_end.strftime("%Y-%m-%d")
-st.session_state.pref_start_date = start_str
-st.session_state.pref_end_date = end_str
+    st.markdown("### Action Selection")
+    available_actions = sorted(df_all["Action"].replace("", pd.NA).dropna().unique())
+    selected_actions = []
+    for act in available_actions:
+      if st.checkbox(act, value=True, key=f"chk_act_{act}"):
+        selected_actions.append(act)
 
-df_day = df_raw[(df_raw["Date"] >= start_str) & (df_raw["Date"] <= end_str)].copy()
+    st.markdown("### Smoothness Filter")
+    min_r2 = st.slider(
+        "Min Smoothness (R²)",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.0,
+        step=0.05,
+    )
+  else:
+    st.info("No signals available.")
+    selected_dates = []
+    watchlist_only = False
+    selected_strategies = []
+    selected_actions = []
+    min_r2 = 0.0
 
-if start_str == end_str:
-    st.sidebar.caption(f"📅 Active Date: `{start_str}`")
-else:
-    st.sidebar.caption(f"📅 Range: `{start_str}` to `{end_str}`")
+  if st.button("🔄 Refresh Data", use_container_width=True):
+    st.cache_data.clear()
+    st.rerun()
 
-st.sidebar.markdown("---")
-only_watchlist = st.sidebar.checkbox(
-    f"⭐ Show Watchlist Only ({len(st.session_state.watchlist_symbols)})", 
-    value=st.session_state.pref_only_watchlist,
-    help="Filters all views down to starred candidates only"
-)
-st.session_state.pref_only_watchlist = only_watchlist
-if only_watchlist:
-    df_day = df_day[df_day["Symbol"].isin(st.session_state.watchlist_symbols)]
+# -----------------------------------------------------------------------------
+# 5. APPLY FILTERS
+# -----------------------------------------------------------------------------
+df_view = df_all.copy()
 
-st.sidebar.markdown("**Strategy Selection**")
-all_strats = sorted([str(s) for s in df_raw["Strategy"].dropna().unique()])
+if not df_view.empty:
+  if selected_dates:
+    df_view = df_view[df_view["Date"].isin(selected_dates)]
+  if selected_strategies:
+    df_view = df_view[df_view["Strategy"].isin(selected_strategies)]
+  else:
+    df_view = df_view.iloc[0:0]
+  if selected_actions:
+    df_view = df_view[df_view["Action"].isin(selected_actions)]
+  else:
+    df_view = df_view.iloc[0:0]
+  df_view = df_view[df_view["R2"] >= min_r2]
+  if watchlist_only:
+    df_view = df_view[df_view["Symbol"].isin(st.session_state.watchlist)]
 
-selected_strats = []
-for strat in all_strats:
-    default_chk = True if st.session_state.pref_strats is None else (strat in st.session_state.pref_strats)
-    if st.sidebar.checkbox(strat, value=default_chk, key=f"chk_strat_{strat}"):
-        selected_strats.append(strat)
+# -----------------------------------------------------------------------------
+# 6. HEADER, KPI CARDS & TABS
+# -----------------------------------------------------------------------------
+st.markdown("## 📊 Market Signals Hub")
 
-st.session_state.pref_strats = selected_strats
-df_day = df_day[df_day["Strategy"].isin(selected_strats)]
+ready_mask = df_view["Action"].str.contains("Ready", case=False, na=False)
+k1, k2, k3, k4 = st.columns(4)
+k1.metric("Active Ready Setups", int(ready_mask.sum()))
+k2.metric("Swing Low Signals", int((df_view["Strategy"] == "Swing Low").sum()))
+k3.metric("AVWAP Bounces", int((df_view["Strategy"] == "AVWAP Bounce").sum()))
+k4.metric("Liquidity Sweeps", int((df_view["Strategy"] == "Liquidity Sweep").sum()))
 
-st.sidebar.markdown("**Action Selection**")
-all_actions = sorted([str(a) for a in df_raw["Action"].dropna().unique() if str(a).strip()])
-
-selected_actions = []
-for action_name in all_actions:
-    default_act_chk = True if st.session_state.pref_actions is None else (action_name in st.session_state.pref_actions)
-    if st.sidebar.checkbox(action_name, value=default_act_chk, key=f"chk_act_{action_name}"):
-        selected_actions.append(action_name)
-
-st.session_state.pref_actions = selected_actions
-df_day = df_day[df_day["Action"].isin(selected_actions)]
-
-st.sidebar.markdown("---")
-
-max_risk = st.sidebar.slider(
-    "Max Risk (%)", 
-    min_value=0.5, 
-    max_value=6.0, 
-    value=st.session_state.pref_risk, 
-    step=0.1
-)
-st.session_state.pref_risk = max_risk
-df_day = df_day[df_day["Risk_Pct"] <= max_risk]
-
-dist_min = float(round(df_raw["Dist_52WH"].min() - 1, 0)) if not df_raw.empty else -30.0
-dist_min = min(dist_min, -30.0)
-min_dist_52wh = st.sidebar.slider(
-    "Max Pullback from 52WH (%)", 
-    min_value=dist_min, 
-    max_value=0.0, 
-    value=st.session_state.pref_dist, 
-    step=0.5
-)
-st.session_state.pref_dist = min_dist_52wh
-df_day = df_day[df_day["Dist_52WH"] >= min_dist_52wh]
-
-st.query_params["dmode"] = selected_date_mode
-st.query_params["start"] = start_str
-st.query_params["end"] = end_str
-st.query_params["wl"] = "1" if only_watchlist else "0"
-st.query_params["strats"] = ",".join(selected_strats)
-st.query_params["acts"] = ",".join(selected_actions)
-st.query_params["risk"] = str(max_risk)
-st.query_params["dist"] = str(min_dist_52wh)
-
-# ----------------------------------------------------------------------
-# 8. TOP HEADER & KPI METRICS
-# ----------------------------------------------------------------------
-st.markdown("<div class=\"dashboard-title\">📊 Market Signals Hub</div>", unsafe_allow_html=True)
-
-kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-active_setups = df_day[df_day["Action"].str.contains("Ready", case=False, na=False)]
-kpi1.metric("Active Ready Setups", len(active_setups))
-kpi2.metric("Swing Low Signals", len(df_day[df_day["Strategy"] == "Swing Low"]))
-kpi3.metric("AVWAP Bounces", len(df_day[df_day["Strategy"] == "AVWAP Bounce"]))
-kpi4.metric("Liquidity Sweeps", len(df_day[df_day["Strategy"] == "Liquidity Sweep"]))
-
-# ----------------------------------------------------------------------
-# 9. WORKSPACE TABS
-# ----------------------------------------------------------------------
-tab_signals, tab_overview, tab_watchlist, tab_notes = st.tabs([
-    f"📋 Signals ({len(df_day)})", 
-    f"📌 Cards ({len(active_setups)})", 
-    f"⭐ Watchlist ({len(st.session_state.watchlist_symbols)})",
-    f"📝 Notes ({len(st.session_state.signal_notes)})"
+tab_signals, tab_cards, tab_watchlist, tab_notes = st.tabs([
+    f"Signals ({len(df_view)})",
+    f"Cards ({len(df_view)})",
+    f"Watchlist ({len(st.session_state.watchlist)})",
+    f"Notes ({len(st.session_state.notes)})",
 ])
 
-# --- TAB 1: SIGNALS TABLE (100% RELIABLE NUMERICAL SORTING + INDIAN FORMATTING) ---
 with tab_signals:
-    if df_day.empty:
-        st.info(f"No signals found for the period ({start_str} to {end_str}).")
-    else:
-        # Construct table with pure numeric types to enable native numerical sorting
-        table_df = pd.DataFrame(index=df_day.index)
-        table_df["Date"] = pd.to_datetime(df_day["Date"], errors="coerce")
-        table_df["Symbol"] = df_day["Symbol"].astype(str)
-        table_df["Strategy"] = df_day["Strategy"].astype(str)
-        table_df["Action"] = df_day["Action"].astype(str)
-        table_df["Hits"] = df_day["Alert_Count"].apply(to_clean_num).astype(int)
-        table_df["Time"] = df_day["Last_Seen"].astype(str)
+  if df_view.empty:
+    st.info("No signals match the active sidebar filters.")
+  else:
+    table_df = (
+        df_view[BASE_TABLE_COLUMNS]
+        .sort_values(by=["Date", "Hits", "R2"], ascending=[False, False, False])
+        .copy()
+    )
+    table_df["Watchlist"] = table_df["Symbol"].isin(st.session_state.watchlist)
+    table_df["Note"] = table_df["Symbol"].apply(
+        lambda s: bool(str(st.session_state.notes.get(s, "")).strip())
+    )
 
-        table_df["LTP"] = df_day["LTP"].apply(to_clean_num)
-        table_df["SL"] = df_day["Stop_Loss"].apply(to_clean_num)
-        table_df["Risk%"] = df_day["Risk_Pct"].apply(to_clean_num)
-        table_df["52WH"] = df_day["High_52W"].apply(to_clean_num)
-        table_df["52W Date"] = pd.to_datetime(df_day["High_52W_Date"], errors="coerce")
-        table_df["Dist%"] = df_day["Dist_52WH"].apply(to_clean_num)
-        table_df["R²"] = df_day["R2"].apply(to_clean_num)
-        table_df["RSI"] = df_day["RSI"].apply(to_clean_num).astype(int)
+    styled_table = style_signal_columns(table_df)
+    disabled_cols = [c for c in table_df.columns if c not in {"Watchlist", "Note"}]
 
-        table_df["Turnover"] = df_day["Turnover_Cr"].apply(to_clean_num)
-        table_df["MCap"] = df_day["Market_Cap_Cr"].apply(to_clean_num)
-        table_df["Vol"] = df_day["Today_Volume"].apply(to_clean_num).astype(int)
-        table_df["1W Vol"] = df_day["Avg_1W_Volume"].apply(to_clean_num).astype(int)
-        table_df["Chart"] = df_day["TradingView_URL"]
-        
-        table_df["📝"] = df_day["Symbol"].apply(lambda s: "📝" if s in st.session_state.signal_notes else "-")
-        table_df["⭐"] = df_day["Symbol"].apply(lambda s: s in st.session_state.watchlist_symbols)
+    edited_df = st.data_editor(
+        styled_table,
+        column_config={
+            "Chart": st.column_config.LinkColumn("Chart", display_text="Open ↗"),
+            "Hits": st.column_config.NumberColumn("Hits", format="%d"),
+            "LTP": st.column_config.NumberColumn("LTP", format="₹%.2f"),
+            "SL": st.column_config.NumberColumn("SL", format="₹%.2f"),
+            "Risk_Pct": st.column_config.NumberColumn("Risk%", format="%.1f%%"),
+            "52WH": st.column_config.NumberColumn("52WH", format="₹%.1f"),
+            "Dist_Pct": st.column_config.NumberColumn("Dist%", format="%.1f%%"),
+            "R2": st.column_config.NumberColumn("R²", format="%.2f"),
+            "RSI": st.column_config.NumberColumn("RSI", format="%.0f"),
+            "Turnover": st.column_config.NumberColumn("Turnover", format="₹%.1f Cr"),
+            "MCap": st.column_config.NumberColumn("MCap", format="₹%,.0f Cr"),
+            "Vol": st.column_config.NumberColumn("Vol", format="%d"),
+            "1W_Vol": st.column_config.NumberColumn("1W Vol", format="%d"),
+            "Watchlist": st.column_config.CheckboxColumn("Watchlist"),
+            "Note": st.column_config.CheckboxColumn("Note"),
+        },
+        disabled=disabled_cols,
+        hide_index=True,
+        use_container_width=True,
+        height=600,
+        key="signals_data_editor",
+    )
 
-        # Mathematical normalization limits for heat maps
-        max_turnover = max(float(table_df["Turnover"].max()) if not table_df.empty else 1.0, 1.0)
-        max_vol = max(float(table_df["Vol"].max()) if not table_df.empty else 1.0, 1.0)
-        max_1w_vol = max(float(table_df["1W Vol"].max()) if not table_df.empty else 1.0, 1.0)
+    updated_watchlist = list(st.session_state.watchlist)
+    watchlist_changed = False
+    for _, erow in edited_df.iterrows():
+      sym = erow["Symbol"]
+      checked_wl = bool(erow["Watchlist"])
+      if checked_wl and sym not in updated_watchlist:
+        updated_watchlist.append(sym)
+        watchlist_changed = True
+      elif not checked_wl and sym in updated_watchlist:
+        updated_watchlist.remove(sym)
+        watchlist_changed = True
 
-        def apply_pure_table_styles(df_in):
-            styles_df = pd.DataFrame("", index=df_in.index, columns=df_in.columns)
-            
-            for idx in df_in.index:
-                # 1. Turnover Single-Color Heatmap
-                t_val = df_in.loc[idx, "Turnover"]
-                r_turnover = min(max(t_val / max_turnover, 0.0), 1.0)
-                r1 = int(248 - r_turnover * (248 - 186))
-                g1 = int(250 - r_turnover * (250 - 230))
-                b1 = int(252 - r_turnover * (252 - 253))
-                styles_df.loc[idx, "Turnover"] = f"background-color: rgb({r1}, {g1}, {b1}); font-weight: 500;"
+    if watchlist_changed:
+      st.session_state.watchlist = updated_watchlist
+      save_json_store(WATCHLIST_FILE, st.session_state.watchlist)
+      st.rerun()
 
-                # 2. Today Volume Single-Color Heatmap
-                v_val = df_in.loc[idx, "Vol"]
-                r_vol = min(max(v_val / max_vol, 0.0), 1.0)
-                r2 = int(248 - r_vol * (248 - 191))
-                g2 = int(250 - r_vol * (250 - 219))
-                b2 = int(252 - r_vol * (252 - 254))
-                styles_df.loc[idx, "Vol"] = f"background-color: rgb({r2}, {g2}, {b2}); font-weight: 500;"
+    view_syms = sorted(table_df["Symbol"].unique())
+    default_sym = (
+        st.session_state.editing_note_for
+        if st.session_state.editing_note_for in view_syms
+        else (view_syms[0] if view_syms else "")
+    )
 
-                # 3. 1W Avg Volume Single-Color Heatmap
-                w_val = df_in.loc[idx, "1W Vol"]
-                r_wvol = min(max(w_val / max_1w_vol, 0.0), 1.0)
-                r3 = int(248 - r_wvol * (248 - 191))
-                g3 = int(250 - r_wvol * (250 - 219))
-                b3 = int(252 - r_wvol * (252 - 254))
-                styles_df.loc[idx, "1W Vol"] = f"background-color: rgb({r3}, {g3}, {b3}); font-weight: 500;"
+    st.markdown("Select Symbol to view / edit trade plan note:")
+    c_combo, c_btn = st.columns([5, 1])
+    with c_combo:
+      chosen_note_sym = st.selectbox(
+          "Select Symbol to view / edit trade plan note:",
+          options=view_syms,
+          index=view_syms.index(default_sym) if default_sym in view_syms else 0,
+          label_visibility="collapsed",
+          key="quick_note_symbol_select",
+      )
+    with c_btn:
+      if st.button("Edit Note", use_container_width=True, key="btn_edit_note_below"):
+        st.session_state.editing_note_for = chosen_note_sym
 
-                # 4. Market Cap Tier Styling
-                m_val = df_in.loc[idx, "MCap"]
-                if m_val >= 80000:
-                    styles_df.loc[idx, "MCap"] = "background-color: #E0E7FF; color: #1E40AF; font-weight: 600;"
-                elif m_val >= 20000:
-                    styles_df.loc[idx, "MCap"] = "background-color: #F1F5F9; color: #334155; font-weight: 600;"
-                else:
-                    styles_df.loc[idx, "MCap"] = "background-color: #E6F4EA; color: #166534; font-weight: 600;"
-
-            return styles_df
-
-        # Apply pure 3:2:2 Indian comma notation via Styler.format
-        # Under the hood, Glide Data Grid sorts the raw float/int values!
-        styled_display = (
-            table_df.style
-            .apply(apply_pure_table_styles, axis=None)
-            .format({
-                "LTP": lambda v: format_indian_currency(v, 2, "₹"),
-                "SL": lambda v: format_indian_currency(v, 2, "₹"),
-                "52WH": lambda v: format_indian_currency(v, 1, "₹"),
-                "Risk%": "{:.1f}%",
-                "Dist%": "{:.1f}%",
-                "R²": "{:.2f}",
-                "RSI": "{:d}",
-                "Turnover": lambda v: f"₹{format_indian_currency(v, 1)} Cr",
-                "MCap": lambda v: f"₹{format_indian_currency(v, 0)} Cr",
-                "Vol": lambda v: format_indian_currency(v, 0),
-                "1W Vol": lambda v: format_indian_currency(v, 0),
-                "Date": lambda d: d.strftime("%Y-%m-%d") if pd.notna(d) else "-",
-                "52W Date": lambda d: d.strftime("%Y-%m-%d") if pd.notna(d) else "-"
-            })
+    if chosen_note_sym and (
+        st.session_state.editing_note_for == chosen_note_sym
+        or st.session_state.notes.get(chosen_note_sym)
+    ):
+      with st.container(border=True):
+        st.markdown(f"**Trade Plan Note — {chosen_note_sym}**")
+        current_trade_note = st.session_state.notes.get(chosen_note_sym, "")
+        draft_note = st.text_area(
+            f"Trade plan note for {chosen_note_sym}",
+            value=current_trade_note,
+            height=95,
+            label_visibility="collapsed",
+            key=f"inline_note_area_{chosen_note_sym}",
         )
+        b_save, b_clear, b_close = st.columns([1, 1, 1])
+        if b_save.button(
+            "Save Trade Note",
+            type="primary",
+            key=f"save_inline_note_{chosen_note_sym}",
+        ):
+          if draft_note.strip():
+            st.session_state.notes[chosen_note_sym] = draft_note.strip()
+          else:
+            st.session_state.notes.pop(chosen_note_sym, None)
+          save_json_store(NOTES_FILE, st.session_state.notes)
+          st.success(f"Saved note for {chosen_note_sym}.")
+          st.rerun()
+        if b_clear.button("Clear Note", key=f"clear_inline_note_{chosen_note_sym}"):
+          st.session_state.notes.pop(chosen_note_sym, None)
+          save_json_store(NOTES_FILE, st.session_state.notes)
+          st.session_state.editing_note_for = None
+          st.rerun()
+        if b_close.button("Close Editor", key=f"close_inline_note_{chosen_note_sym}"):
+          st.session_state.editing_note_for = None
+          st.rerun()
 
-        edited_table = st.data_editor(
-            styled_display,
-            column_config={
-                "Date": st.column_config.DateColumn("Date", width=85),
-                "Symbol": st.column_config.TextColumn("Symbol", width=110, alignment="center"),
-                "Strategy": st.column_config.TextColumn("Strategy", width=120, alignment="center"),
-                "Action": st.column_config.TextColumn("Action", width=130, alignment="center"),
-                "Hits": st.column_config.NumberColumn("Hits", width=50, alignment="center"),
-                "Time": st.column_config.TextColumn("Time", width=65, alignment="center"),
-                "LTP": st.column_config.Column("LTP", width=95),
-                "SL": st.column_config.Column("SL", width=95),
-                "Risk%": st.column_config.Column("Risk%", width=60),
-                "52WH": st.column_config.Column("52WH", width=95),
-                "52W Date": st.column_config.DateColumn("52W Date", width=85),
-                "Dist%": st.column_config.Column("Dist%", width=65),
-                "R²": st.column_config.Column("R²", width=50),
-                "RSI": st.column_config.Column("RSI", width=50),
-                "Turnover": st.column_config.Column("Turnover", width=95),
-                "MCap": st.column_config.Column("MCap", width=115),
-                "Vol": st.column_config.Column("Vol", width=95),
-                "1W Vol": st.column_config.Column("1W Vol", width=95),
-                "Chart": st.column_config.LinkColumn("Chart", width=65, display_text="Open ↗", alignment="center"),
-                "📝": st.column_config.TextColumn("📝", width=40, alignment="center"),
-                "⭐": st.column_config.CheckboxColumn("⭐", width=45, default=False)
-            },
-            disabled=[c for c in table_df.columns if c != "⭐"],
-            hide_index=True,
-            use_container_width=True,
-            height=660,
-            key="signals_data_editor"
-        )
-
-        # Sync changes from table checkboxes directly to dedicated Google Sheet tab
-        current_stars = set(edited_table[edited_table["⭐"] == True]["Symbol"])
-        unstarred = set(edited_table[edited_table["⭐"] == False]["Symbol"])
-        
-        changed_to_star = current_stars - st.session_state.watchlist_symbols
-        changed_to_unstar = unstarred.intersection(st.session_state.watchlist_symbols)
-
-        if changed_to_star or changed_to_unstar:
-            for s in changed_to_star:
-                st.session_state.watchlist_symbols.add(s)
-                sync_symbol_to_sheet(s, watchlist=True)
-            for s in changed_to_unstar:
-                st.session_state.watchlist_symbols.discard(s)
-                sync_symbol_to_sheet(s, watchlist=False)
+with tab_cards:
+  if df_view.empty:
+    st.info("No cards to display for current filter selection.")
+  else:
+    for _, row in df_view.iterrows():
+      sym = row["Symbol"]
+      is_watched = sym in st.session_state.watchlist
+      with st.container(border=True):
+        c_left, c_right = st.columns([4, 1])
+        with c_left:
+          st.markdown(
+              f"**{sym}** — `{row['Strategy']}` | **{row['Action']}** | "
+              f"LTP: **₹{row['LTP']:,.2f}** | SL: **₹{row['SL']:,.2f}** ({row['Risk_Pct']:.1f}%) | "
+              f"R²: **{row['R2']:.2f}** | RSI: **{row['RSI']:.0f}**"
+          )
+          st.caption(
+              f"Date: {row['Date']} ({row['Time']}) | 52WH: ₹{row['52WH']:,.1f} ({row['Dist_Pct']:.1f}%) | "
+              f"Turnover: ₹{row['Turnover']:.1f} Cr | Vol: {row['Vol']:,} vs 1W Avg: {row['1W_Vol']:,} | [TradingView Chart]({row['Chart']})"
+          )
+        with c_right:
+          btn_label = "★ Watching" if is_watched else "☆ Shortlist"
+          if st.button(
+              btn_label,
+              key=f"card_wl_{sym}_{row['Strategy']}",
+              use_container_width=True,
+          ):
+            if is_watched:
+              st.session_state.watchlist.remove(sym)
+            else:
+              st.session_state.watchlist.append(sym)
+            save_json_store(WATCHLIST_FILE, st.session_state.watchlist)
             st.rerun()
 
-        n_col1, n_col2 = st.columns([4, 1])
-        with n_col1:
-            sym_list = sorted(list(df_day["Symbol"].unique()))
-            chosen_sym = st.selectbox("Select Symbol to view / edit trade plan note:", options=sym_list, key="table_note_picker")
-        with n_col2:
-            st.write("")
-            st.write("")
-            if st.button("📝 Edit Note", use_container_width=True):
-                row_match = df_day[df_day["Symbol"] == chosen_sym].iloc[0]
-                open_note_modal(chosen_sym, row_match["Strategy"], format_indian_currency(row_match["LTP"], 2))
-
-# --- TAB 2: OVERVIEW CARDS ---
-with tab_overview:
-    if active_setups.empty:
-        st.info(f"No active setups found matching filters for the selected period.")
-    else:
-        cols_per_row = 4
-        chunks = [active_setups.iloc[i:i + cols_per_row] for i in range(0, len(active_setups), cols_per_row)]
-        
-        global_card_counter = 0
-        for chunk in chunks:
-            grid = st.columns(cols_per_row)
-            for idx, (_, row) in enumerate(chunk.iterrows()):
-                global_card_counter += 1
-                sym = row['Symbol']
-                strat = row['Strategy']
-                strat_clean = re.sub(r'[^a-zA-Z0-9]', '', str(strat))
-                
-                is_starred = sym in st.session_state.watchlist_symbols
-                star_icon = "⭐" if is_starred else "☆"
-                has_note_tag = " 📝" if sym in st.session_state.signal_notes else ""
-                badge_class = "badge-ready" if "Ready" in str(row['Action']) else "badge-wait"
-                tv_url = row["TradingView_URL"]
-
-                with grid[idx]:
-                    with st.container(border=True):
-                        top_left, top_right = st.columns([5, 1])
-                        with top_left:
-                            st.markdown(
-                                f"<a href=\"{tv_url}\" target=\"_blank\" class=\"card-symbol-link\">{sym} ↗</a> "
-                                f"<span style=\"font-size:0.75rem; color:#64748B;\">({strat}){has_note_tag}</span><br>"
-                                f"<span class=\"{badge_class}\">{row['Action']}</span>",
-                                unsafe_allow_html=True
-                            )
-                        with top_right:
-                            btn_key = f"card_star_{sym}_{strat_clean}_{global_card_counter}"
-                            if st.button(star_icon, key=btn_key, help="Click to star/unstar"):
-                                if is_starred:
-                                    st.session_state.watchlist_symbols.discard(sym)
-                                    sync_symbol_to_sheet(sym, watchlist=False)
-                                else:
-                                    st.session_state.watchlist_symbols.add(sym)
-                                    sync_symbol_to_sheet(sym, watchlist=True)
-                                st.rerun()
-
-                        st.markdown(f"""
-                        <div class="card-grid">
-                            <div><span class="card-label">LTP:</span> <span class="card-val">{format_indian_currency(row['LTP'], 2, '₹')}</span></div>
-                            <div><span class="card-label">Risk:</span> <span class="card-val">{row['Risk_Pct']:.2f}%</span></div>
-                            <div><span class="card-label">SL:</span> <span class="card-val">{format_indian_currency(row['Stop_Loss'], 2, '₹')}</span></div>
-                            <div><span class="card-label">R²/RSI:</span> <span class="card-val">{row['R2']:.2f}|{row['RSI']:.0f}</span></div>
-                            <div><span class="card-label">52WH:</span> <span class="card-val">{format_indian_currency(row['High_52W'], 1, '₹')}</span></div>
-                            <div><span class="card-label">Dist:</span> <span class="card-val">{row['Dist_52WH']:.1f}%</span></div>
-                            <div><span class="card-label">Vol:</span> <span class="card-val">{format_indian_currency(row['Today_Volume'], 0)}</span></div>
-                            <div><span class="card-label">MCap:</span> <span class="card-val">₹{format_indian_currency(row['Market_Cap_Cr'], 0)}Cr</span></div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-# --- TAB 3: WATCHLIST ---
 with tab_watchlist:
-    st.markdown(f"### ⭐ Shortlisted Watchlist ({len(st.session_state.watchlist_symbols)})")
-    
-    bookmarked_df = df_day[df_day["Symbol"].isin(st.session_state.watchlist_symbols)].copy()
+  st.markdown("### ⭐ Shortlisted Watchlist")
+  all_syms = sorted(df_all["Symbol"].unique()) if not df_all.empty else []
+  add_sym = st.selectbox("Add Symbol to Watchlist", options=[""] + all_syms, index=0)
+  if st.button("Add to Watchlist") and add_sym:
+    if add_sym not in st.session_state.watchlist:
+      st.session_state.watchlist.append(add_sym)
+      save_json_store(WATCHLIST_FILE, st.session_state.watchlist)
+      st.rerun()
 
-    if not st.session_state.watchlist_symbols:
-        st.info("Your watchlist is currently empty. Star candidates from the **Signals Table** or **Overview Cards** to populate this list.")
-    elif bookmarked_df.empty:
-        st.warning(f"None of your {len(st.session_state.watchlist_symbols)} starred stocks have signals recorded for the active date filter.")
-        st.caption(f"Starred symbols: {', '.join(sorted(st.session_state.watchlist_symbols))}")
-    else:
-        if st.button("🗑️ Clear All Starred", key="btn_clear_wl"):
-            for s in list(st.session_state.watchlist_symbols):
-                sync_symbol_to_sheet(s, watchlist=False)
-            st.session_state.watchlist_symbols.clear()
-            st.rerun()
+  if not st.session_state.watchlist:
+    st.info(
+        "Your watchlist is empty. Shortlist symbols from Cards, check Watchlist in Signals, or add one above."
+    )
+  else:
+    wl_df = (
+        df_all[df_all["Symbol"].isin(st.session_state.watchlist)]
+        if not df_all.empty
+        else pd.DataFrame()
+    )
+    if not wl_df.empty:
+      st.dataframe(
+          style_signal_columns(wl_df[BASE_TABLE_COLUMNS]),
+          hide_index=True,
+          use_container_width=True,
+      )
+    for sym in list(st.session_state.watchlist):
+      col_s, col_rm = st.columns([5, 1])
+      col_s.write(f"**{sym}**")
+      if col_rm.button("Remove", key=f"rm_wl_{sym}"):
+        st.session_state.watchlist.remove(sym)
+        save_json_store(WATCHLIST_FILE, st.session_state.watchlist)
+        st.rerun()
 
-        watch_display = pd.DataFrame()
-        watch_display["Symbol"] = bookmarked_df["Symbol"].astype(str)
-        watch_display["Strategy"] = bookmarked_df["Strategy"].astype(str)
-        watch_display["Action"] = bookmarked_df["Action"].astype(str)
-        watch_display["LTP"] = bookmarked_df["LTP"].apply(lambda v: format_indian_currency(v, 2, "₹"))
-        watch_display["SL"] = bookmarked_df["Stop_Loss"].apply(lambda v: format_indian_currency(v, 2, "₹"))
-        watch_display["Risk%"] = bookmarked_df["Risk_Pct"].apply(lambda v: f"{v:.2f}%")
-        watch_display["52WH"] = bookmarked_df["High_52W"].apply(lambda v: format_indian_currency(v, 2, "₹"))
-        watch_display["52W Date"] = bookmarked_df["High_52W_Date"].astype(str)
-        watch_display["Dist%"] = bookmarked_df["Dist_52WH"].apply(lambda v: f"{v:.2f}%")
-        watch_display["Vol"] = bookmarked_df["Today_Volume"].apply(lambda v: format_indian_currency(v, 0))
-        watch_display["MCap"] = bookmarked_df["Market_Cap_Cr"].apply(lambda v: f"₹{format_indian_currency(v, 0)}Cr")
-        watch_display["Chart"] = bookmarked_df["TradingView_URL"]
-
-        st.dataframe(
-            watch_display,
-            column_config={
-                "Symbol": st.column_config.TextColumn("Symbol", width=110, alignment="center"),
-                "Strategy": st.column_config.TextColumn("Strategy", width=120, alignment="center"),
-                "Action": st.column_config.TextColumn("Action", width=130, alignment="center"),
-                "LTP": st.column_config.TextColumn("LTP", width=85, alignment="center"),
-                "SL": st.column_config.TextColumn("SL", width=85, alignment="center"),
-                "Risk%": st.column_config.TextColumn("Risk%", width=60, alignment="center"),
-                "52WH": st.column_config.TextColumn("52WH", width=85, alignment="center"),
-                "52W Date": st.column_config.TextColumn("52W Date", width=85, alignment="center"),
-                "Dist%": st.column_config.TextColumn("Dist%", width=65, alignment="center"),
-                "Vol": st.column_config.TextColumn("Vol", width=80, alignment="center"),
-                "MCap": st.column_config.TextColumn("MCap", width=85, alignment="center"),
-                "Chart": st.column_config.LinkColumn("Chart", width=65, display_text="Open ↗", alignment="center")
-            },
-            hide_index=True,
-            use_container_width=True,
-            height=450
-        )
-
-# --- TAB 4: SIGNAL NOTES DIRECTORY ---
 with tab_notes:
-    st.markdown(f"### 📝 Saved Trade Notes ({len(st.session_state.signal_notes)})")
-
-    if not st.session_state.signal_notes:
-        st.info("No trade notes saved yet. Use the note launcher below the Signals Table to attach notes to setups.")
+  st.markdown("### 📝 Trade & Setup Notes")
+  note_syms = sorted(
+      list(
+          dict.fromkeys(
+              list(st.session_state.notes.keys())
+              + (sorted(df_all["Symbol"].unique()) if not df_all.empty else [])
+          )
+      )
+  )
+  selected_note_sym = st.selectbox(
+      "Select Symbol for Note",
+      options=note_syms if note_syms else ["GENERAL"],
+  )
+  existing_note = st.session_state.notes.get(selected_note_sym, "")
+  note_text = st.text_area(
+      f"Notes for {selected_note_sym}",
+      value=existing_note,
+      height=140,
+      placeholder="Enter setup observations, entry triggers, stop-loss notes, or FII/DII context...",
+  )
+  c_save, c_del = st.columns([1, 1])
+  if c_save.button("Save Note", type="primary"):
+    if note_text.strip():
+      st.session_state.notes[selected_note_sym] = note_text.strip()
     else:
-        st.caption("💡 *Click directly into any cell under 'Observation / Trade Plan' to update notes in real-time. Clear the text to delete a note.*")
+      st.session_state.notes.pop(selected_note_sym, None)
+    save_json_store(NOTES_FILE, st.session_state.notes)
+    st.success(f"Saved note for {selected_note_sym}.")
+    st.rerun()
 
-        note_rows = []
-        for sym, data in st.session_state.signal_notes.items():
-            tv_link = sanitize_tv_url(sym)
-            note_rows.append({
-                "Symbol": sym,
-                "Strategy": data.get("strategy", "-"),
-                "LTP": data.get("ltp", "-"),
-                "Observation / Trade Plan": data.get("note", ""),
-                "Updated At": data.get("updated_at", "-"),
-                "Chart": tv_link
-            })
+  if c_del.button("Delete Note"):
+    st.session_state.notes.pop(selected_note_sym, None)
+    save_json_store(NOTES_FILE, st.session_state.notes)
+    st.rerun()
 
-        notes_df = pd.DataFrame(note_rows)
-
-        edited_notes = st.data_editor(
-            notes_df,
-            column_config={
-                "Symbol": st.column_config.TextColumn("Symbol", width=110, alignment="center"),
-                "Strategy": st.column_config.TextColumn("Strategy", width=120, alignment="center"),
-                "LTP": st.column_config.TextColumn("LTP", width=85, alignment="center"),
-                "Observation / Trade Plan": st.column_config.TextColumn("Observation / Trade Plan", width="large"),
-                "Updated At": st.column_config.TextColumn("Updated At", width=120, alignment="center"),
-                "Chart": st.column_config.LinkColumn("TradingView", width=80, display_text="Open ↗", alignment="center")
-            },
-            disabled=["Symbol", "Strategy", "LTP", "Updated At", "Chart"],
-            hide_index=True,
-            use_container_width=True,
-            height=450,
-            key="notes_data_editor"
-        )
-
-        # Sync inline table edits back to Google Sheets
-        for _, row_item in edited_notes.iterrows():
-            sym = row_item["Symbol"]
-            new_text = str(row_item["Observation / Trade Plan"]).strip()
-
-            if sym in st.session_state.signal_notes:
-                if new_text and new_text != st.session_state.signal_notes[sym]["note"]:
-                    updated_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-                    st.session_state.signal_notes[sym]["note"] = new_text
-                    st.session_state.signal_notes[sym]["updated_at"] = updated_timestamp
-                    sync_symbol_to_sheet(sym, note=new_text, updated_at=updated_timestamp)
-                elif not new_text:
-                    st.session_state.signal_notes.pop(sym, None)
-                    sync_symbol_to_sheet(sym, note="")
-
-        if st.button("🗑️ Clear All Notes", key="btn_clear_all_notes"):
-            for sym in list(st.session_state.signal_notes.keys()):
-                sync_symbol_to_sheet(sym, note="")
-            st.session_state.signal_notes.clear()
-            st.rerun()
+  if st.session_state.notes:
+    st.divider()
+    for sym, text in st.session_state.notes.items():
+      st.markdown(f"**{sym}:** {text}")
