@@ -201,11 +201,24 @@ def _normalize_signals(raw_df: pd.DataFrame) -> pd.DataFrame:
   return df
 
 
+def _get_gspread_client(sa_file: str):
+  if os.path.exists(sa_file):
+    return gspread.service_account(filename=sa_file)
+  try:
+    if "gcp_service_account" in st.secrets:
+      return gspread.service_account_from_dict(dict(st.secrets["gcp_service_account"]))
+    if "service_account" in st.secrets:
+      return gspread.service_account_from_dict(dict(st.secrets["service_account"]))
+  except Exception:
+    pass
+  return None
+
+
 @st.cache_data(ttl=120, show_spinner=False)
 def _fetch_sheet_df(sheet_name: str, sheet_id: str, sa_file: str) -> pd.DataFrame | None:
-  if not os.path.exists(sa_file):
+  gc = _get_gspread_client(sa_file)
+  if gc is None:
     return None
-  gc = gspread.service_account(filename=sa_file)
   sh = gc.open_by_key(sheet_id.strip()) if sheet_id and sheet_id.strip() else gc.open(sheet_name)
   records = sh.sheet1.get_all_records()
   if not records:
