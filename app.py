@@ -220,6 +220,9 @@ def _normalize_signals(raw_df: pd.DataFrame) -> pd.DataFrame:
         (df.loc[missing_dist, "LTP"] - w52[missing_dist]) / w52[missing_dist]
     ) * 100.0
 
+  # Always show distance to 52W high as a non-negative percentage
+  df["Dist_Pct"] = df["Dist_Pct"].abs()
+
   df = df[df["Symbol"] != ""].copy()
   df["Chart"] = df["Symbol"].apply(
       lambda sym: f"https://www.tradingview.com/chart/{TRADINGVIEW_LAYOUT_ID}/?symbol=NSE:{sym}&interval=D"
