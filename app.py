@@ -74,6 +74,7 @@ st.markdown(
 CSV_FILE = "signals_log.csv"
 WATCHLIST_FILE = "watchlist_store.json"
 NOTES_FILE = "notes_store.json"
+FILTER_PREFS_FILE = "filter_prefs_store.json"
 GOOGLE_SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "Market_Signals")
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "")
 SERVICE_ACCOUNT_FILE = os.getenv("SERVICE_ACCOUNT_FILE", "service_account.json")
@@ -113,7 +114,7 @@ BASE_TABLE_COLUMNS = [
 
 
 # -----------------------------------------------------------------------------
-# 1. PERSISTENT WATCHLIST & NOTES HELPERS
+# 1. PERSISTENT WATCHLIST, NOTES & FILTER PREFERENCES HELPERS
 # -----------------------------------------------------------------------------
 def load_json_store(filepath: str, default):
   if not os.path.exists(filepath):
@@ -126,8 +127,57 @@ def load_json_store(filepath: str, default):
 
 
 def save_json_store(filepath: str, payload) -> None:
-  with open(filepath, "w", encoding="utf-8") as f:
-    json.dump(payload, f, indent=2, ensure_ascii=False)
+  try:
+    with open(filepath, "w", encoding="utf-8") as f:
+      json.dump(payload, f, indent=2, ensure_ascii=False)
+  except Exception:
+    pass
+
+
+def _parse_csv_param(raw_val: str | None) -> set[str]:
+  if not raw_val:
+    return set()
+  return {item.strip() for item in str(raw_val).split("||") if item.strip()}
+
+
+def _encode_csv_param(items: list[str]) -> str:
+  return "||".join(sorted(set(items)))
+
+
+def load_unchecked_prefs(param_key: str, json_key: str) -> set[str]:
+  if param_key in st.query_params:
+    return _parse_csv_param(st.query_params.get(param_key))
+  disk_prefs = load_json_store(FILTER_PREFS_FILE, {})
+  return set(disk_prefs.get(json_key, []))
+
+
+def persist_checkbox_group(
+    group_kind: str, all_options: list[str], widget_prefix: str
+) -> list[str]:
+  unchecked: list[str] = []
+  selected: list[str] = []
+  for opt in all_options:
+    is_checked = bool(st.session_state.get(f"{widget_prefix}{opt}", True))
+    if is_checked:
+      selected.append(opt)
+    else:
+      unchecked.append(opt)
+
+  if group_kind == "strat":
+    param_key, json_key = "off_strats", "unchecked_strategies"
+  else:
+    param_key, json_key = "off_acts", "unchecked_actions"
+
+  encoded = _encode_csv_param(unchecked)
+  if encoded:
+    st.query_params[param_key] = encoded
+  elif param_key in st.query_params:
+    del st.query_params[param_key]
+
+  disk_prefs = load_json_store(FILTER_PREFS_FILE, {})
+  disk_prefs[json_key] = sorted(set(unchecked))
+  save_json_store(FILTER_PREFS_FILE, disk_prefs)
+  return selected
 
 
 # -----------------------------------------------------------------------------
@@ -212,7 +262,6 @@ def _normalize_signals(raw_df: pd.DataFrame) -> pd.DataFrame:
   ]:
     df[num_col] = _clean_num(df[num_col], default=0.0)
 
-  # Fallback calculation if Dist_Pct is 0 but 52WH and LTP exist in source sheet
   if "52WH" in df.columns:
     w52 = _clean_num(df["52WH"], default=0.0)
     missing_dist = (df["Dist_Pct"] == 0.0) & (w52 > 0.0) & (df["LTP"] > 0.0)
@@ -220,7 +269,6 @@ def _normalize_signals(raw_df: pd.DataFrame) -> pd.DataFrame:
         (df.loc[missing_dist, "LTP"] - w52[missing_dist]) / w52[missing_dist]
     ) * 100.0
 
-  # Always show distance to 52W high as a non-negative percentage
   df["Dist_Pct"] = df["Dist_Pct"].abs()
 
   df = df[df["Symbol"] != ""].copy()
@@ -328,7 +376,7 @@ if "editing_note_for" not in st.session_state:
 df_all = load_signals()
 
 # -----------------------------------------------------------------------------
-# 4. SIDEBAR: SIGNAL FILTERS (CHECKBOXES)
+# 4. SIDEBAR: SIGNAL FILTERS (PERSISTED CHECKBOXES)
 # -----------------------------------------------------------------------------
 with st.sidebar:
   st.markdown("## 🔍 Signal Filters")
@@ -365,19 +413,41 @@ with st.sidebar:
     available_strats = list(
         dict.fromkeys(ALL_STRATEGIES + sorted(df_all["Strategy"].unique()))
     )
-    selected_strategies = []
+    saved_unchecked_strats = load_unchecked_prefs(
+        "off_strats", "unchecked_strategies"
+    )
     for strat in available_strats:
-      if st.checkbox(strat, value=True, key=f"chk_strat_{strat}"):
-        selected_strategies.append(strat)
+      w_key = f"chk_strat_{strat}"
+      if w_key not in st.session_state:
+        st.session_state[w_key] = strat not in saved_unchecked_strats
+      st.checkbox(
+          strat,
+          key=w_key,
+          on_change=persist_checkbox_group,
+          args=("strat", available_strats, "chk_strat_"),
+      )
+    selected_strategies = [
+        s for s in available_strats if st.session_state.get(f"chk_strat_{s}", True)
+    ]
 
     st.markdown("### Action Selection")
     available_actions = sorted(
         df_all["Action"].replace("", pd.NA).dropna().unique()
     )
-    selected_actions = []
+    saved_unchecked_acts = load_unchecked_prefs("off_acts", "unchecked_actions")
     for act in available_actions:
-      if st.checkbox(act, value=True, key=f"chk_act_{act}"):
-        selected_actions.append(act)
+      w_key = f"chk_act_{act}"
+      if w_key not in st.session_state:
+        st.session_state[w_key] = act not in saved_unchecked_acts
+      st.checkbox(
+          act,
+          key=w_key,
+          on_change=persist_checkbox_group,
+          args=("act", available_actions, "chk_act_"),
+      )
+    selected_actions = [
+        a for a in available_actions if st.session_state.get(f"chk_act_{a}", True)
+    ]
 
     st.markdown("### Smoothness Filter")
     min_r2 = st.slider(
