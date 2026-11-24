@@ -375,6 +375,17 @@ def _build_tv_link(sym: str, raw_url: str = "") -> str:
     return f"https://www.tradingview.com/chart/{TRADINGVIEW_LAYOUT_ID}/?symbol=NSE:{sym}&interval=D"
 
 
+def _extract_symbol_from_link(val: str) -> str:
+    s = str(val or "").strip()
+    if "symbol=" in s:
+        tail = s.split("symbol=", 1)[1].split("&", 1)[0]
+        for prefix in ["NSE%3A", "NSE:", "NSE%3a", "nse:"]:
+            if tail.startswith(prefix):
+                tail = tail[len(prefix) :]
+        return tail.strip()
+    return s
+
+
 def _normalize_live_stream(raw_df: pd.DataFrame) -> pd.DataFrame:
     if raw_df is None or raw_df.empty:
         return pd.DataFrame()
@@ -443,6 +454,32 @@ def _normalize_live_stream(raw_df: pd.DataFrame) -> pd.DataFrame:
             _build_tv_link(s, u) for s, u in zip(df["Symbol"], url_series)
         ]
 
+    # Compute same-day hits and across-dates hits before deduplicating
+    if "Symbol" in df.columns and not df.empty:
+        raw_sym_key = df["Symbol"].apply(_extract_symbol_from_link)
+        day_counts = (
+            df.assign(_sym=raw_sym_key)
+            .groupby(["Date", "Category", "_sym"])["_sym"]
+            .transform("count")
+        )
+        total_counts = (
+            df.assign(_sym=raw_sym_key)
+            .groupby(["Category", "_sym"])["_sym"]
+            .transform("count")
+        )
+        df["Day_Hits"] = day_counts.astype(int)
+        df["Total_Hits"] = total_counts.astype(int)
+
+        # Keep one unique row per (Date, Category, Symbol), preferring latest time/row
+        time_cols = [
+            c for c in ["Date", "Time", "Timestamp"] if c in df.columns
+        ]
+        if time_cols:
+            df = df.sort_values(by=time_cols, ascending=[True] * len(time_cols))
+        df = df.assign(_sym=raw_sym_key).drop_duplicates(
+            subset=["Date", "Category", "_sym"], keep="last"
+        ).drop(columns=["_sym"])
+
     # Drop unwanted columns requested for Live Stream view
     drop_cols = [
         c
@@ -495,17 +532,6 @@ def _normalize_live_stream(raw_df: pd.DataFrame) -> pd.DataFrame:
             df[col] = numeric_vals.fillna(0.0)
 
     return df
-
-
-def _extract_symbol_from_link(val: str) -> str:
-    s = str(val or "").strip()
-    if "symbol=" in s:
-        tail = s.split("symbol=", 1)[1].split("&", 1)[0]
-        for prefix in ["NSE%3A", "NSE:", "NSE%3a", "nse:"]:
-            if tail.startswith(prefix):
-                tail = tail[len(prefix) :]
-        return tail.strip()
-    return s
 
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -915,7 +941,7 @@ with tab_live_stream:
             else pd.Series([], dtype=str)
         )
         m1, m2, m3 = st.columns(3)
-        m1.metric("Live Alerts Shown", len(df_live_view))
+        m1.metric("Unique Alerts Shown", len(df_live_view))
         m2.metric(
             "Unique Symbols",
             int(live_sym_names.nunique()) if not live_sym_names.empty else 0,
@@ -934,6 +960,8 @@ with tab_live_stream:
         else:
             preferred_after_2nd = [
                 "Category",
+                "Day_Hits",
+                "Total_Hits",
                 "Time",
                 "Timestamp",
                 "Action",
@@ -986,12 +1014,14 @@ with tab_live_stream:
                     "Symbol",
                     display_text=r".*symbol=(?:NSE%3A|NSE:)?([^&]+).*",
                 ),
+                "Day_Hits": st.column_config.NumberColumn("Day Hits", format="%d"),
+                "Total_Hits": st.column_config.NumberColumn("Total Hits", format="%d"),
                 "Watchlist": st.column_config.CheckboxColumn("Watchlist"),
                 "Note": st.column_config.CheckboxColumn("Note"),
             }
             for col in display_live_df.columns:
                 cl = col.lower()
-                if col in {"Symbol", "Watchlist", "Note"}:
+                if col in {"Symbol", "Day_Hits", "Total_Hits", "Watchlist", "Note"}:
                     continue
                 elif any(
                     k in cl
