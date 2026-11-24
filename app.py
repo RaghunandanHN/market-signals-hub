@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import gspread
 import pandas as pd
 import streamlit as st
@@ -65,6 +66,75 @@ st.markdown(
       .stTabs [data-baseweb="tab"] {
         padding-top: 0.25rem !important;
         padding-bottom: 0.25rem !important;
+      }
+      .notes-lhs-wrap div[data-testid="stVerticalBlock"] > div {
+        gap: 0.14rem !important;
+      }
+      .notes-lhs-wrap button[kind="secondary"] {
+        min-height: 1.65rem !important;
+        height: 1.65rem !important;
+        padding: 0.05rem 0.45rem !important;
+        font-size: 0.78rem !important;
+        line-height: 1.1 !important;
+        background-color: #f8fafc !important;
+        color: #1e293b !important;
+        border: 1px solid #e2e8f0 !important;
+        border-radius: 5px !important;
+        justify-content: flex-start !important;
+        text-align: left !important;
+      }
+      .notes-lhs-wrap button[kind="secondary"]:hover {
+        background-color: #eef2ff !important;
+        border-color: #c7d2fe !important;
+        color: #3730a3 !important;
+      }
+      .notes-lhs-wrap button[kind="primary"] {
+        min-height: 1.65rem !important;
+        height: 1.65rem !important;
+        padding: 0.05rem 0.45rem !important;
+        font-size: 0.78rem !important;
+        line-height: 1.1 !important;
+        background-color: #4f46e5 !important;
+        color: #ffffff !important;
+        border: 1px solid #4338ca !important;
+        border-radius: 5px !important;
+        justify-content: flex-start !important;
+        text-align: left !important;
+      }
+      .notes-lhs-wrap button[kind="primary"]:hover {
+        background-color: #4338ca !important;
+        border-color: #3730a3 !important;
+      }
+      .kv-align-table {
+        width: 100%;
+        border-collapse: collapse;
+        border: none !important;
+        background: transparent !important;
+        margin-top: 0.25rem;
+      }
+      .kv-align-table tr {
+        border: none !important;
+        background: transparent !important;
+      }
+      .kv-align-table td {
+        border: none !important;
+        border-color: transparent !important;
+        background: transparent !important;
+        padding: 0.22rem 0.5rem 0.22rem 0 !important;
+        vertical-align: top;
+        font-size: 0.88rem;
+        line-height: 1.35;
+      }
+      .kv-key-col {
+        color: #3730a3 !important;
+        font-weight: 600;
+        white-space: nowrap;
+        width: 24%;
+      }
+      .kv-val-col {
+        color: #0f172a !important;
+        font-weight: 400;
+        word-break: break-word;
       }
     </style>
     """,
@@ -388,6 +458,63 @@ def _extract_symbol_from_link(val: str) -> str:
                 tail = tail[len(prefix) :]
         return tail.strip()
     return s
+
+
+def _format_indian_number_str(num_str: str) -> str:
+    raw = num_str.replace(",", "").strip()
+    sign = ""
+    if raw.startswith(("+", "-")):
+        sign = "-" if raw.startswith("-") else ""
+        raw = raw[1:]
+    if "." in raw:
+        int_part, dec_part = raw.split(".", 1)
+        dec_suffix = f".{dec_part}"
+    else:
+        int_part, dec_suffix = raw, ""
+
+    if not int_part.isdigit():
+        return num_str
+
+    if len(int_part) <= 3:
+        formatted_int = int_part
+    else:
+        last3 = int_part[-3:]
+        rest = int_part[:-3]
+        grouped_rest = re.sub(r"(?=(?:..)*$)", ",", rest).strip(",")
+        formatted_int = f"{grouped_rest},{last3}"
+
+    return f"{sign}{formatted_int}{dec_suffix}"
+
+
+def _format_note_value_indian(val_str: str) -> str:
+    trimmed = val_str.strip()
+    if not trimmed:
+        return ""
+    # Preserve ratios like 1:1.27 or time ranges like 2 to 5 trading days
+    if re.fullmatch(r"[+-]?\d+(?:\.\d+)?(?:\s*:\s*[+-]?\d+(?:\.\d+)?)+", trimmed):
+        return trimmed
+    # Format standalone numbers (with optional leading currency symbol) in Indian grouping
+    m = re.fullmatch(r"(₹\s*)?([+-]?\d[\d,]*(?:\.\d+)?)", trimmed)
+    if m:
+        prefix = m.group(1) or ""
+        return f"{prefix}{_format_indian_number_str(m.group(2))}"
+    return trimmed
+
+
+def _parse_note_kv_rows(note_text: str) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    for raw_line in str(note_text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if ":" in line:
+            k_part, v_part = line.split(":", 1)
+            key_clean = k_part.strip()
+            val_clean = _format_note_value_indian(v_part)
+            rows.append((key_clean, val_clean))
+        else:
+            rows.append(("NOTE", _format_note_value_indian(line)))
+    return rows
 
 
 def _normalize_live_stream(raw_df: pd.DataFrame) -> pd.DataFrame:
@@ -1368,11 +1495,12 @@ with tab_notes:
             st.session_state.selected_note_viewer_sym = noted_syms[0]
 
         active_note_sym = st.session_state.selected_note_viewer_sym
-        pane_left, pane_right = st.columns([1.15, 2.85], gap="medium")
+        pane_left, pane_right = st.columns([1.0, 3.0], gap="medium")
 
         with pane_left:
             with st.container(border=True):
-                st.markdown("**Signals with Notes**")
+                st.markdown(f"**Noted Symbols ({len(noted_syms)})**")
+                st.markdown('<div class="notes-lhs-wrap">', unsafe_allow_html=True)
                 for sym in noted_syms:
                     is_selected = sym == active_note_sym
                     btn_type = "primary" if is_selected else "secondary"
@@ -1384,10 +1512,7 @@ with tab_notes:
                     ):
                         st.session_state.selected_note_viewer_sym = sym
                         st.rerun()
-                    preview = noted_items[sym].replace("\n", " ").strip()
-                    if len(preview) > 72:
-                        preview = preview[:69].rstrip() + "..."
-                    st.caption(preview)
+                st.markdown("</div>", unsafe_allow_html=True)
 
         with pane_right:
             with st.container(border=True):
@@ -1411,5 +1536,16 @@ with tab_notes:
                 if matched_tags:
                     st.caption(" | ".join(dict.fromkeys(t for t in matched_tags if t)))
 
-                st.divider()
-                st.text(noted_items[active_note_sym])
+                kv_rows = _parse_note_kv_rows(noted_items[active_note_sym])
+                rows_html = []
+                for k_str, v_str in kv_rows:
+                    rows_html.append(
+                        f"<tr><td class='kv-key-col'>{k_str}</td><td class='kv-val-col'>{v_str}</td></tr>"
+                    )
+                st.markdown(
+                    "<div style='background:#f8fafc; border-radius:6px; padding:0.45rem 0.7rem;'>"
+                    "<table class='kv-align-table'><tbody>"
+                    + "".join(rows_html)
+                    + "</tbody></table></div>",
+                    unsafe_allow_html=True,
+                )
