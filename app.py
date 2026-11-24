@@ -345,6 +345,16 @@ def _parse_indian_cr_value(val) -> float:
         return 0.0
 
 
+def _build_tv_link(sym: str, raw_url: str = "") -> str:
+    clean_url = str(raw_url or "").strip()
+    if clean_url.startswith(("http://", "https://")):
+        if "symbol=" in clean_url:
+            return clean_url
+        sep = "&" if "?" in clean_url else "?"
+        return f"{clean_url}{sep}symbol=NSE:{sym}"
+    return f"https://www.tradingview.com/chart/{TRADINGVIEW_LAYOUT_ID}/?symbol=NSE:{sym}&interval=D"
+
+
 def _normalize_live_stream(raw_df: pd.DataFrame) -> pd.DataFrame:
     if raw_df is None or raw_df.empty:
         return pd.DataFrame()
@@ -386,17 +396,44 @@ def _normalize_live_stream(raw_df: pd.DataFrame) -> pd.DataFrame:
             .replace("", "Uncategorized")
         )
 
-    # Clean Symbol and attach clickable TradingView chart link
+    # Standardize Symbol column and store TV link in "_Symbol_Link" so Symbol itself displays as a link
     sym_col = next(
         (c for c in ["Symbol", "Ticker", "Stock"] if c in df.columns), None
     )
+    url_col = next(
+        (
+            c
+            for c in ["TradingView_URL", "TradingView", "Chart_URL", "Chart", "Link"]
+            if c in df.columns
+        ),
+        None,
+    )
     if sym_col:
-        df[sym_col] = df[sym_col].astype(str).str.strip()
-        df = df[df[sym_col] != ""].copy()
-        if "Chart" not in df.columns:
-            df["Chart"] = df[sym_col].apply(
-                lambda s: f"https://www.tradingview.com/chart/{TRADINGVIEW_LAYOUT_ID}/?symbol=NSE:{s}&interval=D"
-            )
+        df["Symbol"] = df[sym_col].astype(str).str.strip()
+        if sym_col != "Symbol":
+            df = df.drop(columns=[sym_col])
+        df = df[df["Symbol"] != ""].copy()
+
+        url_series = (
+            df[url_col].astype(str).str.strip()
+            if url_col
+            else pd.Series([""] * len(df), index=df.index)
+        )
+        df["_Symbol_Link"] = [
+            _build_tv_link(s, u) for s, u in zip(df["Symbol"], url_series)
+        ]
+        # Replace Symbol values with the clickable URLs; LinkColumn display_text extracts symbol label
+        df["Symbol"] = df["_Symbol_Link"]
+        df = df.drop(columns=["_Symbol_Link"])
+
+    # Remove standalone chart/url columns so link lives on the 2nd-column stock name
+    drop_link_cols = [
+        c
+        for c in ["TradingView_URL", "TradingView", "Chart_URL", "Chart", "Link"]
+        if c in df.columns
+    ]
+    if drop_link_cols:
+        df = df.drop(columns=drop_link_cols)
 
     # Convert numeric-looking columns cleanly for proper sorting & formatting
     skip_numeric = {
@@ -413,7 +450,6 @@ def _normalize_live_stream(raw_df: pd.DataFrame) -> pd.DataFrame:
         "Signal",
         "Notes",
         "Remarks",
-        "Chart",
         "52W_Date",
         "52W High Date",
         "High_52W_Date",
@@ -442,6 +478,17 @@ def _normalize_live_stream(raw_df: pd.DataFrame) -> pd.DataFrame:
             df[col] = numeric_vals.fillna(0.0)
 
     return df
+
+
+def _extract_symbol_from_link(val: str) -> str:
+    s = str(val or "").strip()
+    if "symbol=" in s:
+        tail = s.split("symbol=", 1)[1].split("&", 1)[0]
+        for prefix in ["NSE%3A", "NSE:", "NSE%3a", "nse:"]:
+            if tail.startswith(prefix):
+                tail = tail[len(prefix) :]
+        return tail.strip()
+    return s
 
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -837,40 +884,42 @@ with tab_live_stream:
         else:
             df_live_view = df_live_view.iloc[0:0]
 
-        # Sort newest first if Date / Time columns exist
-        sort_cols = [c for c in ["Date", "Time", "Timestamp"] if c in df_live_view.columns]
+        sort_cols = [
+            c for c in ["Date", "Time", "Timestamp"] if c in df_live_view.columns
+        ]
         if sort_cols and not df_live_view.empty:
             df_live_view = df_live_view.sort_values(
                 by=sort_cols, ascending=[False] * len(sort_cols)
             )
 
-        # Quick summary strip for Live Stream
-        sym_col = next(
-            (c for c in ["Symbol", "Ticker", "Stock"] if c in df_live_view.columns),
-            None,
+        live_sym_names = (
+            df_live_view["Symbol"].apply(_extract_symbol_from_link)
+            if "Symbol" in df_live_view.columns and not df_live_view.empty
+            else pd.Series([], dtype=str)
         )
         m1, m2, m3 = st.columns(3)
         m1.metric("Live Alerts Shown", len(df_live_view))
         m2.metric(
             "Unique Symbols",
-            int(df_live_view[sym_col].nunique()) if sym_col and not df_live_view.empty else 0,
+            int(live_sym_names.nunique()) if not live_sym_names.empty else 0,
         )
         m3.metric(
             "Categories Shown",
-            int(df_live_view["Category"].nunique()) if not df_live_view.empty else 0,
+            int(df_live_view["Category"].nunique())
+            if not df_live_view.empty
+            else 0,
         )
 
         if df_live_view.empty:
-            st.info("No live stream signals match the selected Date and Category filters.")
+            st.info(
+                "No live stream signals match the selected Date and Category filters."
+            )
         else:
-            # Order priority columns first, keeping any additional sheet columns cleanly after
-            priority_cols = [
-                "Date",
+            # Put Date in 1st column and Symbol (link) in 2nd column, followed by remaining columns
+            preferred_after_2nd = [
+                "Category",
                 "Time",
                 "Timestamp",
-                "Category",
-                "Symbol",
-                "Ticker",
                 "Action",
                 "LTP",
                 "Close",
@@ -884,40 +933,82 @@ with tab_live_stream:
                 "Vol",
                 "Volume",
                 "Vol_Ratio",
+                "Vol_Ratio_20D",
                 "RVOL",
                 "RSI",
+                "RSI_14",
                 "Turnover",
                 "MCap",
-                "Chart",
+                "Mcap",
             ]
-            ordered_cols = [c for c in priority_cols if c in df_live_view.columns] + [
-                c for c in df_live_view.columns if c not in priority_cols
+            lead_cols = [c for c in ["Date", "Symbol"] if c in df_live_view.columns]
+            mid_cols = [
+                c
+                for c in preferred_after_2nd
+                if c in df_live_view.columns and c not in lead_cols
             ]
-            display_live_df = df_live_view[ordered_cols].copy()
+            tail_cols = [
+                c
+                for c in df_live_view.columns
+                if c not in lead_cols and c not in mid_cols
+            ]
+            display_live_df = df_live_view[lead_cols + mid_cols + tail_cols].copy()
 
-            # Build readable column formats dynamically based on present columns
+            display_live_df["Watchlist"] = live_sym_names.isin(
+                st.session_state.watchlist
+            ).values
+            display_live_df["Note"] = live_sym_names.apply(
+                lambda s: bool(str(st.session_state.notes.get(s, "")).strip())
+            ).values
+
+            live_disabled_cols = [
+                c for c in display_live_df.columns if c not in {"Watchlist", "Note"}
+            ]
+
             live_col_config = {
-                "Chart": st.column_config.LinkColumn("Chart", display_text="Open ↗"),
+                "Symbol": st.column_config.LinkColumn(
+                    "Symbol",
+                    display_text=r".*symbol=(?:NSE%3A|NSE:)?([^&]+).*",
+                ),
+                "Watchlist": st.column_config.CheckboxColumn("Watchlist"),
+                "Note": st.column_config.CheckboxColumn("Note"),
             }
             for col in display_live_df.columns:
                 cl = col.lower()
-                if col == "Chart":
+                if col in {"Symbol", "Watchlist", "Note"}:
                     continue
-                elif any(k in cl for k in ["ltp", "price", "close", "pivot", "breakout", "sl", "stop"]):
+                elif any(
+                    k in cl
+                    for k in ["ltp", "price", "close", "pivot", "breakout", "sl", "stop"]
+                ):
                     if "pct" not in cl and "%" not in cl:
-                        live_col_config[col] = st.column_config.NumberColumn(col, format="₹%.2f")
+                        live_col_config[col] = st.column_config.NumberColumn(
+                            col, format="₹%.2f"
+                        )
                 elif "turnover" in cl:
-                    live_col_config[col] = st.column_config.NumberColumn(col, format="₹%.1f Cr")
+                    live_col_config[col] = st.column_config.NumberColumn(
+                        col, format="₹%.1f Cr"
+                    )
                 elif "mcap" in cl or "market cap" in cl:
-                    live_col_config[col] = st.column_config.NumberColumn(col, format="₹%,.0f Cr")
+                    live_col_config[col] = st.column_config.NumberColumn(
+                        col, format="₹%,.0f Cr"
+                    )
                 elif "pct" in cl or "%" in cl or "change" in cl or "dist" in cl:
-                    live_col_config[col] = st.column_config.NumberColumn(col, format="%.2f%%")
+                    live_col_config[col] = st.column_config.NumberColumn(
+                        col, format="%.2f%%"
+                    )
                 elif "rvol" in cl or "ratio" in cl or "mult" in cl:
-                    live_col_config[col] = st.column_config.NumberColumn(col, format="%.2fx")
+                    live_col_config[col] = st.column_config.NumberColumn(
+                        col, format="%.2fx"
+                    )
                 elif "rsi" in cl:
-                    live_col_config[col] = st.column_config.NumberColumn(col, format="%.1f")
+                    live_col_config[col] = st.column_config.NumberColumn(
+                        col, format="%.1f"
+                    )
                 elif "vol" in cl:
-                    live_col_config[col] = st.column_config.NumberColumn(col, format="%,.0f")
+                    live_col_config[col] = st.column_config.NumberColumn(
+                        col, format="%,.0f"
+                    )
 
             def _style_live_stream(df_in: pd.DataFrame):
                 def _row_styler(row):
@@ -926,11 +1017,13 @@ with tab_live_stream:
                         styles["Category"] = (
                             "background-color: #eef2ff; color: #1e3a8a; font-weight: 600;"
                         )
-                    if sym_col and sym_col in styles.index:
-                        styles[sym_col] = "font-weight: 600; color: #0f172a;"
                     if "Action" in styles.index:
                         act_txt = str(row.get("Action", "")).lower()
-                        if "buy" in act_txt or "breakout" in act_txt or "ready" in act_txt:
+                        if (
+                            "buy" in act_txt
+                            or "breakout" in act_txt
+                            or "ready" in act_txt
+                        ):
                             styles["Action"] = (
                                 "background-color: #dcfce7; color: #15803d; font-weight: 600;"
                             )
@@ -938,13 +1031,111 @@ with tab_live_stream:
 
                 return df_in.style.apply(_row_styler, axis=1)
 
-            st.dataframe(
+            edited_live_df = st.data_editor(
                 _style_live_stream(display_live_df),
                 column_config=live_col_config,
+                disabled=live_disabled_cols,
                 hide_index=True,
                 use_container_width=True,
                 height=580,
+                key="live_stream_data_editor",
             )
+
+            updated_live_wl = list(st.session_state.watchlist)
+            live_wl_changed = False
+            for _, erow in edited_live_df.iterrows():
+                sym = _extract_symbol_from_link(erow.get("Symbol", ""))
+                if not sym:
+                    continue
+                checked_wl = bool(erow.get("Watchlist", False))
+                if checked_wl and sym not in updated_live_wl:
+                    updated_live_wl.append(sym)
+                    live_wl_changed = True
+                elif not checked_wl and sym in updated_live_wl:
+                    updated_live_wl.remove(sym)
+                    live_wl_changed = True
+
+            if live_wl_changed:
+                st.session_state.watchlist = updated_live_wl
+                save_json_store(WATCHLIST_FILE, st.session_state.watchlist)
+                st.rerun()
+
+            live_view_syms = sorted(
+                {s for s in live_sym_names.tolist() if s}
+            )
+            default_live_sym = (
+                st.session_state.editing_note_for
+                if st.session_state.editing_note_for in live_view_syms
+                else (live_view_syms[0] if live_view_syms else "")
+            )
+
+            st.markdown("Select Symbol to view / edit trade plan note:")
+            lc_combo, lc_btn = st.columns([5, 1])
+            with lc_combo:
+                chosen_live_note_sym = st.selectbox(
+                    "Select Symbol to view / edit trade plan note:",
+                    options=live_view_syms,
+                    index=(
+                        live_view_syms.index(default_live_sym)
+                        if default_live_sym in live_view_syms
+                        else 0
+                    ),
+                    label_visibility="collapsed",
+                    key="live_quick_note_symbol_select",
+                )
+            with lc_btn:
+                if st.button(
+                    "Edit Note",
+                    use_container_width=True,
+                    key="btn_live_edit_note_below",
+                ):
+                    st.session_state.editing_note_for = chosen_live_note_sym
+
+            if chosen_live_note_sym and (
+                st.session_state.editing_note_for == chosen_live_note_sym
+                or st.session_state.notes.get(chosen_live_note_sym)
+            ):
+                with st.container(border=True):
+                    st.markdown(f"**Trade Plan Note — {chosen_live_note_sym}**")
+                    current_live_note = st.session_state.notes.get(
+                        chosen_live_note_sym, ""
+                    )
+                    draft_live_note = st.text_area(
+                        f"Trade plan note for {chosen_live_note_sym}",
+                        value=current_live_note,
+                        height=95,
+                        label_visibility="collapsed",
+                        key=f"live_inline_note_area_{chosen_live_note_sym}",
+                    )
+                    lb_save, lb_clear, lb_close = st.columns([1, 1, 1])
+                    if lb_save.button(
+                        "Save Trade Note",
+                        type="primary",
+                        key=f"save_live_inline_note_{chosen_live_note_sym}",
+                    ):
+                        if draft_live_note.strip():
+                            st.session_state.notes[chosen_live_note_sym] = (
+                                draft_live_note.strip()
+                            )
+                        else:
+                            st.session_state.notes.pop(chosen_live_note_sym, None)
+                        save_json_store(NOTES_FILE, st.session_state.notes)
+                        st.success(f"Saved note for {chosen_live_note_sym}.")
+                        st.rerun()
+                    if lb_clear.button(
+                        "Clear Note",
+                        key=f"clear_live_inline_note_{chosen_live_note_sym}",
+                    ):
+                        st.session_state.notes.pop(chosen_live_note_sym, None)
+                        save_json_store(NOTES_FILE, st.session_state.notes)
+                        st.session_state.editing_note_for = None
+                        st.rerun()
+                    if lb_close.button(
+                        "Close Editor",
+                        key=f"close_live_inline_note_{chosen_live_note_sym}",
+                    ):
+                        st.session_state.editing_note_for = None
+                        st.rerun()
 
 with tab_cards:
     if df_view.empty:
