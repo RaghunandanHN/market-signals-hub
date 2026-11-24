@@ -184,6 +184,8 @@ BASE_TABLE_COLUMNS = [
     "Chart",
 ]
 
+SIGNALS_TABLE_COLUMNS = [c for c in BASE_TABLE_COLUMNS if c != "Chart"]
+
 LIVE_STREAM_HIDDEN_COLUMNS = {
     "MACD",
     "Signal",
@@ -890,14 +892,21 @@ with tab_signals:
         st.info("No signals match the active sidebar filters.")
     else:
         table_df = (
-            df_view[BASE_TABLE_COLUMNS]
+            df_view[SIGNALS_TABLE_COLUMNS]
             .sort_values(by=["Date", "Hits", "R2"], ascending=[False, False, False])
             .copy()
         )
-        table_df["Watchlist"] = table_df["Symbol"].isin(st.session_state.watchlist)
-        table_df["Note"] = table_df["Symbol"].apply(
-            lambda s: bool(str(st.session_state.notes.get(s, "")).strip())
-        )
+        raw_symbols_order = table_df["Symbol"].tolist()
+        table_df["Symbol"] = [
+            _build_tv_link(s) for s in raw_symbols_order
+        ]
+        table_df["Watchlist"] = [
+            s in st.session_state.watchlist for s in raw_symbols_order
+        ]
+        table_df["Note"] = [
+            bool(str(st.session_state.notes.get(s, "")).strip())
+            for s in raw_symbols_order
+        ]
 
         styled_table = style_signal_columns(table_df)
         disabled_cols = [
@@ -907,7 +916,10 @@ with tab_signals:
         edited_df = st.data_editor(
             styled_table,
             column_config={
-                "Chart": st.column_config.LinkColumn("Chart", display_text="Open ↗"),
+                "Symbol": st.column_config.LinkColumn(
+                    "Symbol",
+                    display_text=r".*symbol=(?:NSE%3A|NSE:)?([^&]+).*",
+                ),
                 "Hits": st.column_config.NumberColumn("Hits", format="%d"),
                 "LTP": st.column_config.NumberColumn("LTP", format="₹%.2f"),
                 "SL": st.column_config.NumberColumn("SL", format="₹%.2f"),
@@ -937,7 +949,7 @@ with tab_signals:
         updated_watchlist = list(st.session_state.watchlist)
         watchlist_changed = False
         for _, erow in edited_df.iterrows():
-            sym = erow["Symbol"]
+            sym = _extract_symbol_from_link(erow["Symbol"])
             checked_wl = bool(erow["Watchlist"])
             if checked_wl and sym not in updated_watchlist:
                 updated_watchlist.append(sym)
@@ -951,7 +963,7 @@ with tab_signals:
             save_json_store(WATCHLIST_FILE, st.session_state.watchlist)
             st.rerun()
 
-        view_syms = sorted(table_df["Symbol"].unique())
+        view_syms = sorted({s for s in raw_symbols_order if s})
         default_sym = (
             st.session_state.editing_note_for
             if st.session_state.editing_note_for in view_syms
