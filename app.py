@@ -326,7 +326,6 @@ def load_watchlist_synced() -> list[str]:
             GOOGLE_SHEET_NAME, GOOGLE_SHEET_ID, SERVICE_ACCOUNT_FILE
         )
         if sheet_wl is not None:
-            # If sheet tab is brand-new & empty while local JSON has entries, migrate local entries up
             if not sheet_wl and local_wl:
                 save_watchlist_synced(local_wl)
                 return list(dict.fromkeys(local_wl))
@@ -338,7 +337,9 @@ def load_watchlist_synced() -> list[str]:
 
 
 def save_watchlist_synced(watchlist_items: list[str]) -> None:
-    clean_items = list(dict.fromkeys([str(s).strip() for s in watchlist_items if str(s).strip()]))
+    clean_items = list(
+        dict.fromkeys([str(s).strip() for s in watchlist_items if str(s).strip()])
+    )
     save_json_store(WATCHLIST_FILE, clean_items)
     try:
         gc = _get_gspread_client(SERVICE_ACCOUNT_FILE)
@@ -365,7 +366,6 @@ def load_notes_synced() -> dict[str, str]:
             GOOGLE_SHEET_NAME, GOOGLE_SHEET_ID, SERVICE_ACCOUNT_FILE
         )
         if sheet_notes is not None:
-            # If sheet tab is brand-new & empty while local JSON has notes, migrate local notes up
             if not sheet_notes and local_notes:
                 save_notes_synced(local_notes)
                 return dict(local_notes)
@@ -544,6 +544,23 @@ def _normalize_signals(raw_df: pd.DataFrame) -> pd.DataFrame:
         lambda sym: f"https://www.tradingview.com/chart/{TRADINGVIEW_LAYOUT_ID}/?symbol=NSE:{sym}&interval=D"
     )
     return df
+
+
+def _get_gspread_client(sa_file: str):
+    if os.path.exists(sa_file):
+        return gspread.service_account(filename=sa_file)
+    try:
+        if "gcp_service_account" in st.secrets:
+            return gspread.service_account_from_dict(
+                dict(st.secrets["gcp_service_account"])
+            )
+        if "service_account" in st.secrets:
+            return gspread.service_account_from_dict(
+                dict(st.secrets["service_account"])
+            )
+    except Exception:
+        pass
+    return None
 
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -1151,7 +1168,7 @@ with tab_signals:
                 draft_note = st.text_area(
                     f"Trade plan note for {chosen_note_sym}",
                     value=current_trade_note,
-                    height=95,
+                    height=380,
                     label_visibility="collapsed",
                     key=f"inline_note_area_{chosen_note_sym}",
                 )
@@ -1454,7 +1471,7 @@ with tab_live_stream:
                     draft_live_note = st.text_area(
                         f"Trade plan note for {chosen_live_note_sym}",
                         value=current_live_note,
-                        height=95,
+                        height=380,
                         label_visibility="collapsed",
                         key=f"live_inline_note_area_{chosen_live_note_sym}",
                     )
