@@ -67,43 +67,43 @@ st.markdown(
         padding-top: 0.25rem !important;
         padding-bottom: 0.25rem !important;
       }
-      .notes-lhs-wrap div[data-testid="stVerticalBlock"] > div {
-        gap: 0.14rem !important;
+      /* Compact, pleasing slate-blue buttons in Notes tab (replaces large maroon buttons) */
+      div[data-testid="stTabPanel"]:nth-of-type(5) div[data-testid="stVerticalBlock"] > div {
+        gap: 0.22rem !important;
       }
-      .notes-lhs-wrap button[kind="secondary"] {
-        min-height: 1.65rem !important;
-        height: 1.65rem !important;
-        padding: 0.05rem 0.45rem !important;
+      div[data-testid="stTabPanel"]:nth-of-type(5) button[data-testid="stBaseButton-secondary"],
+      div[data-testid="stTabPanel"]:nth-of-type(5) button[data-testid="stBaseButton-primary"],
+      div[data-testid="stTabPanel"]:nth-of-type(5) .stButton > button {
+        min-height: 1.85rem !important;
+        height: 1.85rem !important;
+        padding: 0.1rem 0.45rem !important;
         font-size: 0.78rem !important;
+        font-weight: 600 !important;
         line-height: 1.1 !important;
+        border-radius: 6px !important;
+      }
+      div[data-testid="stTabPanel"]:nth-of-type(5) button[data-testid="stBaseButton-secondary"],
+      div[data-testid="stTabPanel"]:nth-of-type(5) .stButton > button[kind="secondary"] {
         background-color: #f8fafc !important;
         color: #1e293b !important;
-        border: 1px solid #e2e8f0 !important;
-        border-radius: 5px !important;
-        justify-content: flex-start !important;
-        text-align: left !important;
+        border: 1px solid #cbd5e1 !important;
       }
-      .notes-lhs-wrap button[kind="secondary"]:hover {
-        background-color: #eef2ff !important;
-        border-color: #c7d2fe !important;
-        color: #3730a3 !important;
+      div[data-testid="stTabPanel"]:nth-of-type(5) button[data-testid="stBaseButton-secondary"]:hover,
+      div[data-testid="stTabPanel"]:nth-of-type(5) .stButton > button[kind="secondary"]:hover {
+        background-color: #e0f2fe !important;
+        border-color: #7dd3fc !important;
+        color: #0369a1 !important;
       }
-      .notes-lhs-wrap button[kind="primary"] {
-        min-height: 1.65rem !important;
-        height: 1.65rem !important;
-        padding: 0.05rem 0.45rem !important;
-        font-size: 0.78rem !important;
-        line-height: 1.1 !important;
-        background-color: #4f46e5 !important;
+      div[data-testid="stTabPanel"]:nth-of-type(5) button[data-testid="stBaseButton-primary"],
+      div[data-testid="stTabPanel"]:nth-of-type(5) .stButton > button[kind="primary"] {
+        background-color: #0284c7 !important;
         color: #ffffff !important;
-        border: 1px solid #4338ca !important;
-        border-radius: 5px !important;
-        justify-content: flex-start !important;
-        text-align: left !important;
+        border: 1px solid #0369a1 !important;
       }
-      .notes-lhs-wrap button[kind="primary"]:hover {
-        background-color: #4338ca !important;
-        border-color: #3730a3 !important;
+      div[data-testid="stTabPanel"]:nth-of-type(5) button[data-testid="stBaseButton-primary"]:hover,
+      div[data-testid="stTabPanel"]:nth-of-type(5) .stButton > button[kind="primary"]:hover {
+        background-color: #0369a1 !important;
+        border-color: #075985 !important;
       }
       .kv-align-table {
         width: 100%;
@@ -126,7 +126,7 @@ st.markdown(
         line-height: 1.35;
       }
       .kv-key-col {
-        color: #3730a3 !important;
+        color: #0369a1 !important;
         font-weight: 600;
         white-space: nowrap;
         width: 24%;
@@ -490,10 +490,8 @@ def _format_note_value_indian(val_str: str) -> str:
     trimmed = val_str.strip()
     if not trimmed:
         return ""
-    # Preserve ratios like 1:1.27 or time ranges like 2 to 5 trading days
     if re.fullmatch(r"[+-]?\d+(?:\.\d+)?(?:\s*:\s*[+-]?\d+(?:\.\d+)?)+", trimmed):
         return trimmed
-    # Format standalone numbers (with optional leading currency symbol) in Indian grouping
     m = re.fullmatch(r"(₹\s*)?([+-]?\d[\d,]*(?:\.\d+)?)", trimmed)
     if m:
         prefix = m.group(1) or ""
@@ -1495,24 +1493,37 @@ with tab_notes:
             st.session_state.selected_note_viewer_sym = noted_syms[0]
 
         active_note_sym = st.session_state.selected_note_viewer_sym
-        pane_left, pane_right = st.columns([1.0, 3.0], gap="medium")
+        pane_left, pane_right = st.columns([1.15, 2.85], gap="medium")
 
         with pane_left:
             with st.container(border=True):
                 st.markdown(f"**Noted Symbols ({len(noted_syms)})**")
-                st.markdown('<div class="notes-lhs-wrap">', unsafe_allow_html=True)
-                for sym in noted_syms:
-                    is_selected = sym == active_note_sym
-                    btn_type = "primary" if is_selected else "secondary"
-                    if st.button(
-                        f"{'▸ ' if is_selected else ''}{sym}",
-                        key=f"note_pane_btn_{sym}",
-                        type=btn_type,
-                        use_container_width=True,
-                    ):
-                        st.session_state.selected_note_viewer_sym = sym
-                        st.rerun()
-                st.markdown("</div>", unsafe_allow_html=True)
+                for idx in range(0, len(noted_syms), 2):
+                    btn_col1, btn_col2 = st.columns(2, gap="small")
+                    sym1 = noted_syms[idx]
+                    is_sel1 = sym1 == active_note_sym
+                    with btn_col1:
+                        if st.button(
+                            f"{'▸ ' if is_sel1 else ''}{sym1}",
+                            key=f"note_pane_btn_{sym1}",
+                            type="primary" if is_sel1 else "secondary",
+                            use_container_width=True,
+                        ):
+                            st.session_state.selected_note_viewer_sym = sym1
+                            st.rerun()
+
+                    if idx + 1 < len(noted_syms):
+                        sym2 = noted_syms[idx + 1]
+                        is_sel2 = sym2 == active_note_sym
+                        with btn_col2:
+                            if st.button(
+                                f"{'▸ ' if is_sel2 else ''}{sym2}",
+                                key=f"note_pane_btn_{sym2}",
+                                type="primary" if is_sel2 else "secondary",
+                                use_container_width=True,
+                            ):
+                                st.session_state.selected_note_viewer_sym = sym2
+                                st.rerun()
 
         with pane_right:
             with st.container(border=True):
