@@ -1227,7 +1227,25 @@ with tab_cards:
 
 with tab_watchlist:
     st.markdown("### ⭐ Shortlisted Watchlist")
-    all_syms = sorted(df_all["Symbol"].unique()) if not df_all.empty else []
+    live_syms_all = (
+        sorted(
+            {
+                _extract_symbol_from_link(s)
+                for s in df_live_all["Symbol"].dropna().tolist()
+                if _extract_symbol_from_link(s)
+            }
+        )
+        if not df_live_all.empty and "Symbol" in df_live_all.columns
+        else []
+    )
+    all_syms = sorted(
+        list(
+            dict.fromkeys(
+                (sorted(df_all["Symbol"].unique()) if not df_all.empty else [])
+                + live_syms_all
+            )
+        )
+    )
     add_sym = st.selectbox(
         "Add Symbol to Watchlist", options=[""] + all_syms, index=0
     )
@@ -1242,24 +1260,74 @@ with tab_watchlist:
             "Your watchlist is empty. Shortlist symbols from Cards, check Watchlist in Signals, or add one above."
         )
     else:
-        wl_df = (
+        wl_sig_df = (
             df_all[df_all["Symbol"].isin(st.session_state.watchlist)]
             if not df_all.empty
             else pd.DataFrame()
         )
-        if not wl_df.empty:
-            st.dataframe(
-                style_signal_columns(wl_df[BASE_TABLE_COLUMNS]),
-                hide_index=True,
-                use_container_width=True,
-            )
+        rendered_syms: set[str] = set()
+
+        if not wl_sig_df.empty:
+            for idx, row in wl_sig_df.iterrows():
+                sym = row["Symbol"]
+                rendered_syms.add(sym)
+                with st.container(border=True):
+                    c_left, c_right = st.columns([4, 1])
+                    with c_left:
+                        st.markdown(
+                            f"**{sym}** — `{row['Strategy']}` | **{row['Action']}** | "
+                            f"LTP: **₹{row['LTP']:,.2f}** | SL: **₹{row['SL']:,.2f}** ({row['Risk_Pct']:.1f}%) | "
+                            f"R²: **{row['R2']:.2f}** | RSI: **{row['RSI']:.0f}**"
+                        )
+                        st.caption(
+                            f"Date: {row['Date']} ({row['Time']}) | Dist to 52WH: {row['Dist_Pct']:.1f}% ({row['52W_Date']}) | "
+                            f"Turnover: ₹{row['Turnover']:.1f} Cr | Vol: {row['Vol']:,} vs 1W Avg: {row['1W_Vol']:,} | [TradingView Chart]({row['Chart']})"
+                        )
+                    with c_right:
+                        if st.button(
+                            "★ Watching",
+                            key=f"wl_card_rm_{sym}_{row['Strategy']}_{idx}",
+                            use_container_width=True,
+                        ):
+                            st.session_state.watchlist.remove(sym)
+                            save_json_store(WATCHLIST_FILE, st.session_state.watchlist)
+                            st.rerun()
+
         for sym in list(st.session_state.watchlist):
-            col_s, col_rm = st.columns([5, 1])
-            col_s.write(f"**{sym}**")
-            if col_rm.button("Remove", key=f"rm_wl_{sym}"):
-                st.session_state.watchlist.remove(sym)
-                save_json_store(WATCHLIST_FILE, st.session_state.watchlist)
-                st.rerun()
+            if sym in rendered_syms:
+                continue
+            live_match = (
+                df_live_all[
+                    df_live_all["Symbol"].apply(_extract_symbol_from_link) == sym
+                ]
+                if not df_live_all.empty and "Symbol" in df_live_all.columns
+                else pd.DataFrame()
+            )
+            with st.container(border=True):
+                c_left, c_right = st.columns([4, 1])
+                with c_left:
+                    if not live_match.empty:
+                        lrow = live_match.iloc[0]
+                        tv_url = str(lrow.get("Symbol", "")).strip() or _build_tv_link(sym)
+                        cat_val = lrow.get("Category", "")
+                        dt_val = lrow.get("Date", "")
+                        st.markdown(f"**{sym}** — `{cat_val}`")
+                        st.caption(
+                            f"Date: {dt_val} | [TradingView Chart]({tv_url})"
+                        )
+                    else:
+                        tv_url = _build_tv_link(sym)
+                        st.markdown(f"**{sym}**")
+                        st.caption(f"[TradingView Chart]({tv_url})")
+                with c_right:
+                    if st.button(
+                        "★ Watching",
+                        key=f"wl_card_fallback_rm_{sym}",
+                        use_container_width=True,
+                    ):
+                        st.session_state.watchlist.remove(sym)
+                        save_json_store(WATCHLIST_FILE, st.session_state.watchlist)
+                        st.rerun()
 
 with tab_notes:
     st.markdown("### 📝 Saved Signal Notes")
