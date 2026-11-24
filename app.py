@@ -67,13 +67,26 @@ st.markdown(
         padding-top: 0.25rem !important;
         padding-bottom: 0.25rem !important;
       }
-      /* Compact, pleasing slate-blue buttons in Notes tab (replaces large maroon buttons) */
-      div[data-testid="stTabPanel"]:nth-of-type(5) div[data-testid="stVerticalBlock"] > div {
+      /* Override Streamlit primary button color globally so no maroon/red appears */
+      button[data-testid="stBaseButton-primary"],
+      .stButton > button[kind="primary"] {
+        background-color: #0284c7 !important;
+        border-color: #0369a1 !important;
+        color: #ffffff !important;
+      }
+      button[data-testid="stBaseButton-primary"]:hover,
+      .stButton > button[kind="primary"]:hover {
+        background-color: #0369a1 !important;
+        border-color: #075985 !important;
+        color: #ffffff !important;
+      }
+      /* Compact symbol buttons inside tab panels */
+      div[role="tabpanel"] div[data-testid="stVerticalBlock"] > div {
         gap: 0.22rem !important;
       }
-      div[data-testid="stTabPanel"]:nth-of-type(5) button[data-testid="stBaseButton-secondary"],
-      div[data-testid="stTabPanel"]:nth-of-type(5) button[data-testid="stBaseButton-primary"],
-      div[data-testid="stTabPanel"]:nth-of-type(5) .stButton > button {
+      div[role="tabpanel"] button[data-testid="stBaseButton-secondary"],
+      div[role="tabpanel"] button[data-testid="stBaseButton-primary"],
+      div[role="tabpanel"] .stButton > button {
         min-height: 1.85rem !important;
         height: 1.85rem !important;
         padding: 0.1rem 0.45rem !important;
@@ -82,28 +95,17 @@ st.markdown(
         line-height: 1.1 !important;
         border-radius: 6px !important;
       }
-      div[data-testid="stTabPanel"]:nth-of-type(5) button[data-testid="stBaseButton-secondary"],
-      div[data-testid="stTabPanel"]:nth-of-type(5) .stButton > button[kind="secondary"] {
+      div[role="tabpanel"] button[data-testid="stBaseButton-secondary"],
+      div[role="tabpanel"] .stButton > button[kind="secondary"] {
         background-color: #f8fafc !important;
         color: #1e293b !important;
         border: 1px solid #cbd5e1 !important;
       }
-      div[data-testid="stTabPanel"]:nth-of-type(5) button[data-testid="stBaseButton-secondary"]:hover,
-      div[data-testid="stTabPanel"]:nth-of-type(5) .stButton > button[kind="secondary"]:hover {
+      div[role="tabpanel"] button[data-testid="stBaseButton-secondary"]:hover,
+      div[role="tabpanel"] .stButton > button[kind="secondary"]:hover {
         background-color: #e0f2fe !important;
         border-color: #7dd3fc !important;
         color: #0369a1 !important;
-      }
-      div[data-testid="stTabPanel"]:nth-of-type(5) button[data-testid="stBaseButton-primary"],
-      div[data-testid="stTabPanel"]:nth-of-type(5) .stButton > button[kind="primary"] {
-        background-color: #0284c7 !important;
-        color: #ffffff !important;
-        border: 1px solid #0369a1 !important;
-      }
-      div[data-testid="stTabPanel"]:nth-of-type(5) button[data-testid="stBaseButton-primary"]:hover,
-      div[data-testid="stTabPanel"]:nth-of-type(5) .stButton > button[kind="primary"]:hover {
-        background-color: #0369a1 !important;
-        border-color: #075985 !important;
       }
       .kv-align-table {
         width: 100%;
