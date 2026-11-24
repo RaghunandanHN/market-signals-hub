@@ -1,3 +1,4 @@
+from datetime import datetime
 import json
 import os
 import re
@@ -152,6 +153,9 @@ GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "")
 SERVICE_ACCOUNT_FILE = os.getenv("SERVICE_ACCOUNT_FILE", "service_account.json")
 TRADINGVIEW_LAYOUT_ID = os.getenv("TRADINGVIEW_LAYOUT_ID", "qQrGXVOL")
 
+WATCHLIST_TAB_NAME = "Watchlist"
+NOTES_TAB_NAME = "Notes"
+
 ALL_STRATEGIES = [
     "AVWAP Bounce",
     "EMA20 Pullback",
@@ -212,7 +216,7 @@ LIVE_STREAM_HIDDEN_COLUMNS = {
 
 
 # -----------------------------------------------------------------------------
-# 1. PERSISTENT WATCHLIST, NOTES & FILTER PREFERENCES HELPERS
+# 1. PERSISTENT WATCHLIST, NOTES & FILTER PREFERENCES HELPERS (GOOGLE SHEETS + JSON)
 # -----------------------------------------------------------------------------
 def load_json_store(filepath: str, default):
     if not os.path.exists(filepath):
@@ -230,6 +234,172 @@ def save_json_store(filepath: str, payload) -> None:
             json.dump(payload, f, indent=2, ensure_ascii=False)
     except Exception:
         pass
+
+
+def _get_gspread_client(sa_file: str):
+    if os.path.exists(sa_file):
+        return gspread.service_account(filename=sa_file)
+    try:
+        if "gcp_service_account" in st.secrets:
+            return gspread.service_account_from_dict(
+                dict(st.secrets["gcp_service_account"])
+            )
+        if "service_account" in st.secrets:
+            return gspread.service_account_from_dict(
+                dict(st.secrets["service_account"])
+            )
+    except Exception:
+        pass
+    return None
+
+
+def _open_spreadsheet(gc):
+    if gc is None:
+        return None
+    return (
+        gc.open_by_key(GOOGLE_SHEET_ID.strip())
+        if GOOGLE_SHEET_ID and GOOGLE_SHEET_ID.strip()
+        else gc.open(GOOGLE_SHEET_NAME)
+    )
+
+
+def _get_or_create_worksheet(sh, tab_name: str, headers: list[str], rows: int = 200):
+    try:
+        ws = sh.worksheet(tab_name)
+    except gspread.WorksheetNotFound:
+        ws = sh.add_worksheet(title=tab_name, rows=rows, cols=max(len(headers), 4))
+        ws.update([headers], value_input_option="USER_ENTERED")
+    return ws
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _fetch_watchlist_from_sheet(
+    sheet_name: str, sheet_id: str, sa_file: str
+) -> list[str] | None:
+    gc = _get_gspread_client(sa_file)
+    if gc is None:
+        return None
+    sh = (
+        gc.open_by_key(sheet_id.strip())
+        if sheet_id and sheet_id.strip()
+        else gc.open(sheet_name)
+    )
+    ws = _get_or_create_worksheet(sh, WATCHLIST_TAB_NAME, ["Symbol", "Updated_At"])
+    records = ws.get_all_records()
+    symbols: list[str] = []
+    for rec in records:
+        sym = str(rec.get("Symbol", "")).strip()
+        if sym and sym not in symbols:
+            symbols.append(sym)
+    return symbols
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _fetch_notes_from_sheet(
+    sheet_name: str, sheet_id: str, sa_file: str
+) -> dict[str, str] | None:
+    gc = _get_gspread_client(sa_file)
+    if gc is None:
+        return None
+    sh = (
+        gc.open_by_key(sheet_id.strip())
+        if sheet_id and sheet_id.strip()
+        else gc.open(sheet_name)
+    )
+    ws = _get_or_create_worksheet(
+        sh, NOTES_TAB_NAME, ["Symbol", "Note", "Updated_At"]
+    )
+    records = ws.get_all_records()
+    notes_map: dict[str, str] = {}
+    for rec in records:
+        sym = str(rec.get("Symbol", "")).strip()
+        note_val = str(rec.get("Note", "")).strip()
+        if sym and note_val:
+            notes_map[sym] = note_val
+    return notes_map
+
+
+def load_watchlist_synced() -> list[str]:
+    local_wl = load_json_store(WATCHLIST_FILE, [])
+    try:
+        sheet_wl = _fetch_watchlist_from_sheet(
+            GOOGLE_SHEET_NAME, GOOGLE_SHEET_ID, SERVICE_ACCOUNT_FILE
+        )
+        if sheet_wl is not None:
+            # If sheet tab is brand-new & empty while local JSON has entries, migrate local entries up
+            if not sheet_wl and local_wl:
+                save_watchlist_synced(local_wl)
+                return list(dict.fromkeys(local_wl))
+            save_json_store(WATCHLIST_FILE, sheet_wl)
+            return sheet_wl
+    except Exception as exc:
+        st.sidebar.warning(f"Watchlist sheet sync fallback: {exc}")
+    return list(dict.fromkeys(local_wl))
+
+
+def save_watchlist_synced(watchlist_items: list[str]) -> None:
+    clean_items = list(dict.fromkeys([str(s).strip() for s in watchlist_items if str(s).strip()]))
+    save_json_store(WATCHLIST_FILE, clean_items)
+    try:
+        gc = _get_gspread_client(SERVICE_ACCOUNT_FILE)
+        sh = _open_spreadsheet(gc)
+        if sh is not None:
+            ws = _get_or_create_worksheet(
+                sh, WATCHLIST_TAB_NAME, ["Symbol", "Updated_At"]
+            )
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            rows = [["Symbol", "Updated_At"]] + [
+                [sym, now_str] for sym in clean_items
+            ]
+            ws.clear()
+            ws.update(rows, value_input_option="USER_ENTERED")
+            _fetch_watchlist_from_sheet.clear()
+    except Exception as exc:
+        st.warning(f"Saved locally, but Google Sheets Watchlist sync failed: {exc}")
+
+
+def load_notes_synced() -> dict[str, str]:
+    local_notes = load_json_store(NOTES_FILE, {})
+    try:
+        sheet_notes = _fetch_notes_from_sheet(
+            GOOGLE_SHEET_NAME, GOOGLE_SHEET_ID, SERVICE_ACCOUNT_FILE
+        )
+        if sheet_notes is not None:
+            # If sheet tab is brand-new & empty while local JSON has notes, migrate local notes up
+            if not sheet_notes and local_notes:
+                save_notes_synced(local_notes)
+                return dict(local_notes)
+            save_json_store(NOTES_FILE, sheet_notes)
+            return sheet_notes
+    except Exception as exc:
+        st.sidebar.warning(f"Notes sheet sync fallback: {exc}")
+    return dict(local_notes)
+
+
+def save_notes_synced(notes_map: dict[str, str]) -> None:
+    clean_notes = {
+        str(k).strip(): str(v).strip()
+        for k, v in notes_map.items()
+        if str(k).strip() and str(v).strip()
+    }
+    save_json_store(NOTES_FILE, clean_notes)
+    try:
+        gc = _get_gspread_client(SERVICE_ACCOUNT_FILE)
+        sh = _open_spreadsheet(gc)
+        if sh is not None:
+            ws = _get_or_create_worksheet(
+                sh, NOTES_TAB_NAME, ["Symbol", "Note", "Updated_At"]
+            )
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            rows = [["Symbol", "Note", "Updated_At"]] + [
+                [sym, note_txt, now_str]
+                for sym, note_txt in sorted(clean_notes.items())
+            ]
+            ws.clear()
+            ws.update(rows, value_input_option="USER_ENTERED")
+            _fetch_notes_from_sheet.clear()
+    except Exception as exc:
+        st.warning(f"Saved locally, but Google Sheets Notes sync failed: {exc}")
 
 
 def _parse_csv_param(raw_val: str | None) -> set[str]:
@@ -374,23 +544,6 @@ def _normalize_signals(raw_df: pd.DataFrame) -> pd.DataFrame:
         lambda sym: f"https://www.tradingview.com/chart/{TRADINGVIEW_LAYOUT_ID}/?symbol=NSE:{sym}&interval=D"
     )
     return df
-
-
-def _get_gspread_client(sa_file: str):
-    if os.path.exists(sa_file):
-        return gspread.service_account(filename=sa_file)
-    try:
-        if "gcp_service_account" in st.secrets:
-            return gspread.service_account_from_dict(
-                dict(st.secrets["gcp_service_account"])
-            )
-        if "service_account" in st.secrets:
-            return gspread.service_account_from_dict(
-                dict(st.secrets["service_account"])
-            )
-    except Exception:
-        pass
-    return None
 
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -737,10 +890,10 @@ def style_signal_columns(df: pd.DataFrame):
 # 3. INITIALIZE SESSION STATE FOR WATCHLIST, NOTES & NOTE EDITOR
 # -----------------------------------------------------------------------------
 if "watchlist" not in st.session_state:
-    st.session_state.watchlist = load_json_store(WATCHLIST_FILE, [])
+    st.session_state.watchlist = load_watchlist_synced()
 
 if "notes" not in st.session_state:
-    st.session_state.notes = load_json_store(NOTES_FILE, {})
+    st.session_state.notes = load_notes_synced()
 
 if "editing_note_for" not in st.session_state:
     st.session_state.editing_note_for = None
@@ -843,6 +996,8 @@ with st.sidebar:
 
     if st.button("🔄 Refresh Data", use_container_width=True):
         st.cache_data.clear()
+        st.session_state.watchlist = load_watchlist_synced()
+        st.session_state.notes = load_notes_synced()
         st.rerun()
 
 # -----------------------------------------------------------------------------
@@ -960,7 +1115,7 @@ with tab_signals:
 
         if watchlist_changed:
             st.session_state.watchlist = updated_watchlist
-            save_json_store(WATCHLIST_FILE, st.session_state.watchlist)
+            save_watchlist_synced(st.session_state.watchlist)
             st.rerun()
 
         view_syms = sorted({s for s in raw_symbols_order if s})
@@ -1010,14 +1165,14 @@ with tab_signals:
                         st.session_state.notes[chosen_note_sym] = draft_note.strip()
                     else:
                         st.session_state.notes.pop(chosen_note_sym, None)
-                    save_json_store(NOTES_FILE, st.session_state.notes)
+                    save_notes_synced(st.session_state.notes)
                     st.success(f"Saved note for {chosen_note_sym}.")
                     st.rerun()
                 if b_clear.button(
                     "Clear Note", key=f"clear_inline_note_{chosen_note_sym}"
                 ):
                     st.session_state.notes.pop(chosen_note_sym, None)
-                    save_json_store(NOTES_FILE, st.session_state.notes)
+                    save_notes_synced(st.session_state.notes)
                     st.session_state.editing_note_for = None
                     st.rerun()
                 if b_close.button(
@@ -1063,6 +1218,8 @@ with tab_live_stream:
                 key="btn_refresh_live_stream",
             ):
                 st.cache_data.clear()
+                st.session_state.watchlist = load_watchlist_synced()
+                st.session_state.notes = load_notes_synced()
                 st.rerun()
 
         df_live_view = df_live_all.copy()
@@ -1251,7 +1408,7 @@ with tab_live_stream:
 
             if live_wl_changed:
                 st.session_state.watchlist = updated_live_wl
-                save_json_store(WATCHLIST_FILE, st.session_state.watchlist)
+                save_watchlist_synced(st.session_state.watchlist)
                 st.rerun()
 
             live_view_syms = sorted(
@@ -1313,7 +1470,7 @@ with tab_live_stream:
                             )
                         else:
                             st.session_state.notes.pop(chosen_live_note_sym, None)
-                        save_json_store(NOTES_FILE, st.session_state.notes)
+                        save_notes_synced(st.session_state.notes)
                         st.success(f"Saved note for {chosen_live_note_sym}.")
                         st.rerun()
                     if lb_clear.button(
@@ -1321,7 +1478,7 @@ with tab_live_stream:
                         key=f"clear_live_inline_note_{chosen_live_note_sym}",
                     ):
                         st.session_state.notes.pop(chosen_live_note_sym, None)
-                        save_json_store(NOTES_FILE, st.session_state.notes)
+                        save_notes_synced(st.session_state.notes)
                         st.session_state.editing_note_for = None
                         st.rerun()
                     if lb_close.button(
@@ -1361,7 +1518,7 @@ with tab_cards:
                             st.session_state.watchlist.remove(sym)
                         else:
                             st.session_state.watchlist.append(sym)
-                        save_json_store(WATCHLIST_FILE, st.session_state.watchlist)
+                        save_watchlist_synced(st.session_state.watchlist)
                         st.rerun()
 
 with tab_watchlist:
@@ -1391,7 +1548,7 @@ with tab_watchlist:
     if st.button("Add to Watchlist") and add_sym:
         if add_sym not in st.session_state.watchlist:
             st.session_state.watchlist.append(add_sym)
-            save_json_store(WATCHLIST_FILE, st.session_state.watchlist)
+            save_watchlist_synced(st.session_state.watchlist)
             st.rerun()
 
     if not st.session_state.watchlist:
@@ -1488,7 +1645,7 @@ with tab_watchlist:
                     ):
                         if sym in st.session_state.watchlist:
                             st.session_state.watchlist.remove(sym)
-                            save_json_store(WATCHLIST_FILE, st.session_state.watchlist)
+                            save_watchlist_synced(st.session_state.watchlist)
                             st.rerun()
 
 with tab_notes:
