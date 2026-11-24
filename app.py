@@ -130,6 +130,10 @@ LIVE_STREAM_HIDDEN_COLUMNS = {
     "Trade_Risk_Rs",
     "Target_Gain_Rs",
     "TradingView_URL",
+    "DMA_20",
+    "DMA_200",
+    "Pct_Below_20DMA",
+    "Pct_Above_200DMA",
 }
 
 
@@ -476,9 +480,11 @@ def _normalize_live_stream(raw_df: pd.DataFrame) -> pd.DataFrame:
         ]
         if time_cols:
             df = df.sort_values(by=time_cols, ascending=[True] * len(time_cols))
-        df = df.assign(_sym=raw_sym_key).drop_duplicates(
-            subset=["Date", "Category", "_sym"], keep="last"
-        ).drop(columns=["_sym"])
+        df = (
+            df.assign(_sym=raw_sym_key)
+            .drop_duplicates(subset=["Date", "Category", "_sym"], keep="last")
+            .drop(columns=["_sym"])
+        )
 
     # Drop unwanted columns requested for Live Stream view
     drop_cols = [
