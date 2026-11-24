@@ -616,6 +616,9 @@ if "notes" not in st.session_state:
 if "editing_note_for" not in st.session_state:
     st.session_state.editing_note_for = None
 
+if "selected_note_viewer_sym" not in st.session_state:
+    st.session_state.selected_note_viewer_sym = None
+
 df_all = load_signals()
 df_live_all, live_stream_err = load_live_stream()
 
@@ -1259,42 +1262,63 @@ with tab_watchlist:
                 st.rerun()
 
 with tab_notes:
-    st.markdown("### 📝 Trade & Setup Notes")
-    note_syms = sorted(
-        list(
-            dict.fromkeys(
-                list(st.session_state.notes.keys())
-                + (sorted(df_all["Symbol"].unique()) if not df_all.empty else [])
-            )
-        )
-    )
-    selected_note_sym = st.selectbox(
-        "Select Symbol for Note",
-        options=note_syms if note_syms else ["GENERAL"],
-    )
-    existing_note = st.session_state.notes.get(selected_note_sym, "")
-    note_text = st.text_area(
-        f"Notes for {selected_note_sym}",
-        value=existing_note,
-        height=140,
-        placeholder="Enter setup observations, entry triggers, stop-loss notes, or FII/DII context...",
-    )
-    c_save, c_del = st.columns([1, 1])
-    if c_save.button("Save Note", type="primary"):
-        if note_text.strip():
-            st.session_state.notes[selected_note_sym] = note_text.strip()
-        else:
-            st.session_state.notes.pop(selected_note_sym, None)
-        save_json_store(NOTES_FILE, st.session_state.notes)
-        st.success(f"Saved note for {selected_note_sym}.")
-        st.rerun()
+    st.markdown("### 📝 Saved Signal Notes")
+    noted_items = {
+        str(sym).strip(): str(txt).strip()
+        for sym, txt in st.session_state.notes.items()
+        if str(sym).strip() and str(txt).strip()
+    }
 
-    if c_del.button("Delete Note"):
-        st.session_state.notes.pop(selected_note_sym, None)
-        save_json_store(NOTES_FILE, st.session_state.notes)
-        st.rerun()
+    if not noted_items:
+        st.info("No signals currently have saved notes.")
+    else:
+        noted_syms = list(noted_items.keys())
+        if st.session_state.selected_note_viewer_sym not in noted_items:
+            st.session_state.selected_note_viewer_sym = noted_syms[0]
 
-    if st.session_state.notes:
-        st.divider()
-        for sym, text in st.session_state.notes.items():
-            st.markdown(f"**{sym}:** {text}")
+        active_note_sym = st.session_state.selected_note_viewer_sym
+        pane_left, pane_right = st.columns([1.15, 2.85], gap="medium")
+
+        with pane_left:
+            with st.container(border=True):
+                st.markdown("**Signals with Notes**")
+                for sym in noted_syms:
+                    is_selected = sym == active_note_sym
+                    btn_type = "primary" if is_selected else "secondary"
+                    if st.button(
+                        f"{'▸ ' if is_selected else ''}{sym}",
+                        key=f"note_pane_btn_{sym}",
+                        type=btn_type,
+                        use_container_width=True,
+                    ):
+                        st.session_state.selected_note_viewer_sym = sym
+                        st.rerun()
+                    preview = noted_items[sym].replace("\n", " ").strip()
+                    if len(preview) > 72:
+                        preview = preview[:69].rstrip() + "..."
+                    st.caption(preview)
+
+        with pane_right:
+            with st.container(border=True):
+                st.markdown(f"### {active_note_sym}")
+                matched_tags = []
+                if not df_all.empty and "Symbol" in df_all.columns:
+                    m_sig = df_all[df_all["Symbol"] == active_note_sym]
+                    for _, r in m_sig.iterrows():
+                        matched_tags.append(
+                            f"{r.get('Strategy', '')} ({r.get('Action', '')})".strip()
+                        )
+                if not df_live_all.empty and "Symbol" in df_live_all.columns:
+                    live_syms_clean = df_live_all["Symbol"].apply(
+                        _extract_symbol_from_link
+                    )
+                    m_live = df_live_all[live_syms_clean == active_note_sym]
+                    for _, r in m_live.iterrows():
+                        matched_tags.append(
+                            f"Live: {r.get('Category', '')} [{r.get('Date', '')}]".strip()
+                        )
+                if matched_tags:
+                    st.caption(" | ".join(dict.fromkeys(t for t in matched_tags if t)))
+
+                st.divider()
+                st.text(noted_items[active_note_sym])
