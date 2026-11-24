@@ -112,6 +112,26 @@ BASE_TABLE_COLUMNS = [
     "Chart",
 ]
 
+LIVE_STREAM_HIDDEN_COLUMNS = {
+    "MACD",
+    "Signal",
+    "Hist",
+    "Prev_Hist",
+    "Cross_Below_0",
+    "Green_Candle",
+    "MACD_Hook_Up",
+    "Hist_Inflection",
+    "Verdict_Confidence",
+    "Entry",
+    "Exit",
+    "Risk",
+    "Target",
+    "Qty",
+    "Trade_Risk_Rs",
+    "Target_Gain_Rs",
+    "TradingView_URL",
+}
+
 
 # -----------------------------------------------------------------------------
 # 1. PERSISTENT WATCHLIST, NOTES & FILTER PREFERENCES HELPERS
@@ -396,7 +416,7 @@ def _normalize_live_stream(raw_df: pd.DataFrame) -> pd.DataFrame:
             .replace("", "Uncategorized")
         )
 
-    # Standardize Symbol column and store TV link in "_Symbol_Link" so Symbol itself displays as a link
+    # Standardize Symbol column and turn Symbol itself into a clickable TradingView link
     sym_col = next(
         (c for c in ["Symbol", "Ticker", "Stock"] if c in df.columns), None
     )
@@ -419,21 +439,19 @@ def _normalize_live_stream(raw_df: pd.DataFrame) -> pd.DataFrame:
             if url_col
             else pd.Series([""] * len(df), index=df.index)
         )
-        df["_Symbol_Link"] = [
+        df["Symbol"] = [
             _build_tv_link(s, u) for s, u in zip(df["Symbol"], url_series)
         ]
-        # Replace Symbol values with the clickable URLs; LinkColumn display_text extracts symbol label
-        df["Symbol"] = df["_Symbol_Link"]
-        df = df.drop(columns=["_Symbol_Link"])
 
-    # Remove standalone chart/url columns so link lives on the 2nd-column stock name
-    drop_link_cols = [
+    # Drop unwanted columns requested for Live Stream view
+    drop_cols = [
         c
-        for c in ["TradingView_URL", "TradingView", "Chart_URL", "Chart", "Link"]
-        if c in df.columns
+        for c in df.columns
+        if c in LIVE_STREAM_HIDDEN_COLUMNS
+        or c.lower() in {x.lower() for x in LIVE_STREAM_HIDDEN_COLUMNS}
     ]
-    if drop_link_cols:
-        df = df.drop(columns=drop_link_cols)
+    if drop_cols:
+        df = df.drop(columns=drop_cols)
 
     # Convert numeric-looking columns cleanly for proper sorting & formatting
     skip_numeric = {
@@ -447,7 +465,6 @@ def _normalize_live_stream(raw_df: pd.DataFrame) -> pd.DataFrame:
         "Category",
         "Strategy",
         "Action",
-        "Signal",
         "Notes",
         "Remarks",
         "52W_Date",
@@ -915,7 +932,6 @@ with tab_live_stream:
                 "No live stream signals match the selected Date and Category filters."
             )
         else:
-            # Put Date in 1st column and Symbol (link) in 2nd column, followed by remaining columns
             preferred_after_2nd = [
                 "Category",
                 "Time",
