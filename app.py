@@ -331,6 +331,20 @@ def load_signals() -> pd.DataFrame:
 # -----------------------------------------------------------------------------
 # 2A. LIVE STREAM DATA ACCESS ("Signals" TAB IN GOOGLE SHEETS)
 # -----------------------------------------------------------------------------
+def _parse_indian_cr_value(val) -> float:
+    s = str(val).replace("₹", "").replace(",", "").replace("Cr", "").strip()
+    if not s or s.lower() in {"nan", "none", "-"}:
+        return 0.0
+    mult = 1.0
+    if s.endswith(("L", "l")):
+        mult = 100000.0
+        s = s[:-1].strip()
+    try:
+        return float(s) * mult
+    except Exception:
+        return 0.0
+
+
 def _normalize_live_stream(raw_df: pd.DataFrame) -> pd.DataFrame:
     if raw_df is None or raw_df.empty:
         return pd.DataFrame()
@@ -402,9 +416,15 @@ def _normalize_live_stream(raw_df: pd.DataFrame) -> pd.DataFrame:
         "Chart",
         "52W_Date",
         "52W High Date",
+        "High_52W_Date",
+        "Sector",
+        "Industry",
     }
     for col in df.columns:
         if col in skip_numeric:
+            continue
+        if "mcap" in col.lower() or "market cap" in col.lower():
+            df[col] = df[col].apply(_parse_indian_cr_value)
             continue
         cleaned = (
             df[col]
@@ -784,11 +804,10 @@ with tab_live_stream:
         f_col1, f_col2, f_col3 = st.columns([1.4, 2.6, 1.0])
         with f_col1:
             date_options = ["All Dates"] + live_dates
-            default_date_idx = 1 if live_dates else 0
             selected_live_date = st.selectbox(
                 "Filter by Date",
                 options=date_options,
-                index=default_date_idx,
+                index=0,
                 key="live_stream_date_filter",
             )
         with f_col2:
